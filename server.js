@@ -52,7 +52,7 @@ app.get('/api/auxfiles', async (req, res) => {
     const [results] = await db.query('SELECT * FROM AuxFiles');
     res.json(results);
   } catch (err) {
-    console.error("Database query error on /api/auxfiles:", err);
+    console.error("Database query error on /api/AuxFiles:", err);
     return res.status(500).json({ error: 'Database query failed' });
   }
 });
