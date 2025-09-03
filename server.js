@@ -49,7 +49,7 @@ app.get('/api/digitalrecording', async (req, res) => { // Added async
 // Endpoint to get all records from the AuxFiles table
 app.get('/api/auxfiles', async (req, res) => {
   try {
-    const [results] = await db.query('SELECT * FROM auxfiles');
+    const [results] = await db.query('SELECT * FROM AuxFiles');
     res.json(results);
   } catch (err) {
     console.error("Database query error on /api/auxfiles:", err);
@@ -61,7 +61,7 @@ app.get('/api/auxfiles', async (req, res) => {
 app.get('/api/auxfiles/:fkMLID', async (req, res) => {
     const { fkMLID } = req.params;
     try {
-        const [results] = await db.query('SELECT * FROM auxfiles WHERE fkMLID = ?', [fkMLID]);
+        const [results] = await db.query('SELECT * FROM AuxFiles WHERE fkMLID = ?', [fkMLID]);
 
         if (results.length === 0) {
             return res.status(404).json({ message: `Auxiliary file with code ${fkMLID} not found.` });
