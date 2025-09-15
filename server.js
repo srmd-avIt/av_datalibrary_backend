@@ -70,7 +70,7 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
 // =================================================================
 
 // --- Events Endpoints ---
-app.get('/api/users', async (req, res) => {
+app.get('/api/events', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -85,7 +85,7 @@ app.get('/api/users', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Database query failed' }); }
 });
 
-app.get('/api/users/export', async (req, res) => {
+app.get('/api/events/export', async (req, res) => {
   try {
     // FIX: Call the generic buildWhereClause function
     const { whereString, params } = buildWhereClause(req.query, ['EventCode', 'EventName', 'Yr'], ['EventID', 'EventCode', 'Yr','SubmittedDate','FromDate','ToDate', 'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId','IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount','PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration','LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo' /* add more... */]);
