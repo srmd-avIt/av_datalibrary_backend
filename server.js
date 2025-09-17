@@ -11,79 +11,158 @@ app.use(express.json());
 
 
 
-// =================================================================
+// ✅ UPGRADED: This function translates API parameters (start_date) to database columns (FromDate)
+// It uses DATE() for robust, timezone-agnostic comparisons.
 const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
-    const { page, limit, search, ...filters } = queryParams;
+    const allowedOperators = {
+        '=': '=', '!=': '!=', '>': '>', '<': '<', '>=': '>=', '<=': '<=',
+        'like': 'LIKE', 'not like': 'NOT LIKE', 'in': 'IN',
+        'is null': 'IS NULL', 'is not null': 'IS NOT NULL',
+    };
+
+    const { page, limit, search, advanced_filters, start_date, end_date, ...filters } = queryParams;
     const whereClauses = [];
     let params = [];
 
-    // 1. Handle Global Search
+    // --- 1. Handle Global Search ---
     if (search && searchFields.length > 0) {
         const searchConditions = searchFields.map(field => `${db.escapeId(field)} LIKE ?`).join(' OR ');
         whereClauses.push(`(${searchConditions})`);
-        const searchPattern = `%${search}%`;
-        searchFields.forEach(() => params.push(searchPattern));
+        params.push(...searchFields.map(() => `%${search}%`));
     }
 
-    // 2. Handle Detailed Filters
+    // --- 2. Handle Simple Key-Value Filters ---
     Object.keys(filters).forEach(key => {
         const filterValue = queryParams[key];
         const fieldName = key.replace(/_min|_max$/, '');
-        
-        if (allColumns.length > 0 && !allColumns.includes(fieldName)) {
-            return;
-        }
-
-        if (key.endsWith('_min')) {
-            whereClauses.push(`${db.escapeId(fieldName)} >= ?`);
-            params.push(filterValue);
-        } else if (key.endsWith('_max')) {
-            whereClauses.push(`${db.escapeId(fieldName)} <= ?`);
-            params.push(filterValue);
-        } else if (Array.isArray(filterValue) && filterValue.length > 0) {
-            const hasEmptyFilter = filterValue.includes('__EMPTY__');
-            const otherValues = filterValue.filter(v => v !== '__EMPTY__');
-            let clauseParts = [];
-            if (hasEmptyFilter) {
-                clauseParts.push(`(${db.escapeId(fieldName)} IS NULL OR ${db.escapeId(fieldName)} = '')`);
-            }
-            if (otherValues.length > 0) {
-                const placeholders = otherValues.map(() => '?').join(',');
-                clauseParts.push(`${db.escapeId(fieldName)} IN (${placeholders})`);
-                params = params.concat(otherValues);
-            }
-            if (clauseParts.length > 0) {
-                whereClauses.push(`(${clauseParts.join(' OR ')})`);
-            }
-        } else if (typeof filterValue === 'string' && filterValue.trim() !== '') {
-            whereClauses.push(`${db.escapeId(fieldName)} LIKE ?`);
-            params.push(`%${filterValue}%`);
-        }
+        if (allColumns.length > 0 && !allColumns.includes(fieldName)) { return; }
+        if (key.endsWith('_min')) { whereClauses.push(`${db.escapeId(fieldName)} >= ?`); params.push(filterValue); }
+        else if (key.endsWith('_max')) { whereClauses.push(`${db.escapeId(fieldName)} <= ?`); params.push(filterValue); }
+        else if (Array.isArray(filterValue) && filterValue.length > 0) { const hasEmptyFilter = filterValue.includes('__EMPTY__'); const otherValues = filterValue.filter(v => v !== '__EMPTY__'); let clauseParts = []; if (hasEmptyFilter) { clauseParts.push(`(${db.escapeId(fieldName)} IS NULL OR ${db.escapeId(fieldName)} = '')`); } if (otherValues.length > 0) { const placeholders = otherValues.map(() => '?').join(','); clauseParts.push(`${db.escapeId(fieldName)} IN (${placeholders})`); params = params.concat(otherValues); } if (clauseParts.length > 0) { whereClauses.push(`(${clauseParts.join(' OR ')})`); } }
+        else if (typeof filterValue === 'string' && filterValue.trim() !== '' && filterValue !== 'all') { whereClauses.push(`${db.escapeId(fieldName)} = ?`); params.push(filterValue); }
     });
+
+    // --- 3. Handle Date Range Filter (for Timeline View) ---
+    if (start_date && end_date) {
+        if (allColumns.includes('FromDate')) {
+            whereClauses.push(`(DATE(FromDate) <= DATE(?) AND DATE(COALESCE(ToDate, FromDate)) >= DATE(?))`);
+            params.push(end_date, start_date);
+        }
+        else if (allColumns.includes('SubmittedDate')) {
+            whereClauses.push(`DATE(SubmittedDate) BETWEEN DATE(?) AND DATE(?)`);
+            params.push(start_date, end_date);
+        }
+    }
+
+    // --- 4. Handle Advanced Filters JSON ---
+    if (advanced_filters) {
+        try {
+            const filterGroups = JSON.parse(advanced_filters);
+            if (!Array.isArray(filterGroups)) return;
+            const groupClauses = [];
+
+            for (const group of filterGroups) {
+                if (!group.rules || group.rules.length === 0) continue;
+                const ruleClauses = [];
+                for (const rule of group.rules) {
+                    const operatorKey = String(rule.operator).toLowerCase();
+                    if (!allColumns.includes(rule.field) || !allowedOperators[operatorKey]) continue;
+                    const field = db.escapeId(rule.field);
+                    const operator = allowedOperators[operatorKey];
+                    if (operator === 'IS NULL' || operator === 'IS NOT NULL') {
+                        ruleClauses.push(`${field} ${operator}`);
+                    } else if (operator === 'IN') {
+                        const inValues = Array.isArray(rule.value) ? rule.value.filter(v => v) : [rule.value].filter(v => v);
+                        if (inValues.length === 0) continue;
+                        const placeholders = inValues.map(() => '?').join(',');
+                        ruleClauses.push(`${field} IN (${placeholders})`);
+                        params.push(...inValues);
+                    } else {
+                        ruleClauses.push(`${field} ${operator} ?`);
+                        params.push(operator.includes('LIKE') ? `%${rule.value}%` : rule.value);
+                    }
+                }
+                if (ruleClauses.length > 0) {
+                    groupClauses.push(`(${ruleClauses.join(` ${group.logic} `)})`);
+                }
+            }
+            if (groupClauses.length > 0) {
+                whereClauses.push(...groupClauses);
+            }
+        } catch (e) {
+            console.error("Failed to parse advanced_filters:", e);
+        }
+    }
 
     return { whereString: whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '', params };
 };
 
+// Helper for sorting
+const buildOrderByClause = (queryParams, allowedColumns = []) => {
+    let { sortBy, sortDirection } = queryParams;
+    const direction = (String(sortDirection).toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
+    if (sortBy && allowedColumns.includes(sortBy)) {
+        return `ORDER BY ${db.escapeId(sortBy)} ${direction}`;
+    }
+    return '';
+};
 
-// =================================================================
-// API ENDPOINTS
-// =================================================================
 
-// --- Events Endpoints ---
+// --- Events Endpoint ---
+// --- Events Endpoint ---
 app.get('/api/events', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const { whereString, params } = buildWhereClause(req.query, ['EventCode', 'EventName', 'Yr'], ['EventID', 'EventCode', 'Yr', 'EventName' /* add more... */]);
+
+    // Normalize dates (force YYYY-MM-DD)
+    function normalizeDate(d) {
+      return d ? new Date(d).toISOString().slice(0, 10) : null;
+    }
+    req.query.start_date = normalizeDate(req.query.start_date);
+    req.query.end_date = normalizeDate(req.query.end_date);
+
+    const filterableColumns = [
+      'EventID','EventCode','Yr','SubmittedDate','FromDate','ToDate',
+      'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId',
+      'IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount',
+      'PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration',
+      'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EventCode', 'EventName', 'Yr'], // searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM Events ${whereString}`;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
-    const dataQuery = `SELECT * FROM Events ${whereString} LIMIT ? OFFSET ?`;
+
+    // --- Data Query ---
+    const dataQuery = `SELECT * FROM Events ${whereString} ${orderByString} LIMIT ? OFFSET ?`;
     const [results] = await db.query(dataQuery, [...params, limit, offset]);
-    res.json({ data: results, totalPages, currentPage: page });
-  } catch (err) { res.status(500).json({ error: 'Database query failed' }); }
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
+  } catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
 });
+
 
 app.get('/api/events/export', async (req, res) => {
   try {
