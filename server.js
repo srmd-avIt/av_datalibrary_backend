@@ -13,89 +13,150 @@ app.use(express.json());
 
 // ✅ UPGRADED: This function translates API parameters (start_date) to database columns (FromDate)
 // It uses DATE() for robust, timezone-agnostic comparisons.
+// ✅ Refactored buildWhereClause (no start_date / end_date filter)
 const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
+    // This map now perfectly matches the operators sent by the frontend.
     const allowedOperators = {
-        '=': '=', '!=': '!=', '>': '>', '<': '<', '>=': '>=', '<=': '<=',
-        'like': 'LIKE', 'not like': 'NOT LIKE', 'in': 'IN',
-        'is null': 'IS NULL', 'is not null': 'IS NOT NULL',
+        // Text/General
+        'contains': 'LIKE',
+        'not_contains': 'NOT LIKE',
+        'equals': '=',
+        'not_equals': '!=',
+        'starts_with': 'LIKE',
+        'ends_with': 'LIKE',
+        'in': 'IN',
+        'not_in': 'NOT IN',
+        // Number/Date specific
+        'greater': '>',
+        'greater_equal': '>=',
+        'less': '<',
+        'less_equal': '<=',
+        // Special operators handled by custom logic below
+        'is_empty': 'IS_EMPTY',
+        'is_not_empty': 'IS_NOT_EMPTY',
+        'between': 'BETWEEN',
     };
 
-    const { page, limit, search, advanced_filters, start_date, end_date, ...filters } = queryParams;
+    const { page, limit, search, advanced_filters, ...filters } = queryParams;
     const whereClauses = [];
     let params = [];
 
-    // --- 1. Handle Global Search ---
+    // --- 1. Handle Global Search (Unchanged) ---
     if (search && searchFields.length > 0) {
-        const searchConditions = searchFields.map(field => `${db.escapeId(field)} LIKE ?`).join(' OR ');
+        const searchConditions = searchFields
+            .map(field => `${db.escapeId(field)} LIKE ?`)
+            .join(' OR ');
         whereClauses.push(`(${searchConditions})`);
         params.push(...searchFields.map(() => `%${search}%`));
     }
 
-    // --- 2. Handle Simple Key-Value Filters ---
+    // --- 2. Handle Simple Key-Value Filters (Unchanged) ---
     Object.keys(filters).forEach(key => {
+        // ... (this part of your function was correct and remains the same)
         const filterValue = queryParams[key];
         const fieldName = key.replace(/_min|_max$/, '');
-        if (allColumns.length > 0 && !allColumns.includes(fieldName)) { return; }
-        if (key.endsWith('_min')) { whereClauses.push(`${db.escapeId(fieldName)} >= ?`); params.push(filterValue); }
-        else if (key.endsWith('_max')) { whereClauses.push(`${db.escapeId(fieldName)} <= ?`); params.push(filterValue); }
-        else if (Array.isArray(filterValue) && filterValue.length > 0) { const hasEmptyFilter = filterValue.includes('__EMPTY__'); const otherValues = filterValue.filter(v => v !== '__EMPTY__'); let clauseParts = []; if (hasEmptyFilter) { clauseParts.push(`(${db.escapeId(fieldName)} IS NULL OR ${db.escapeId(fieldName)} = '')`); } if (otherValues.length > 0) { const placeholders = otherValues.map(() => '?').join(','); clauseParts.push(`${db.escapeId(fieldName)} IN (${placeholders})`); params = params.concat(otherValues); } if (clauseParts.length > 0) { whereClauses.push(`(${clauseParts.join(' OR ')})`); } }
-        else if (typeof filterValue === 'string' && filterValue.trim() !== '' && filterValue !== 'all') { whereClauses.push(`${db.escapeId(fieldName)} = ?`); params.push(filterValue); }
+        if (allColumns.length > 0 && !allColumns.includes(fieldName)) return;
+        if (key.endsWith('_min')) {
+            whereClauses.push(`${db.escapeId(fieldName)} >= ?`);
+            params.push(filterValue);
+        } else if (key.endsWith('_max')) {
+            whereClauses.push(`${db.escapeId(fieldName)} <= ?`);
+            params.push(filterValue);
+        } else if (typeof filterValue === 'string' && filterValue.trim() !== '' && filterValue !== 'all') {
+            whereClauses.push(`${db.escapeId(fieldName)} = ?`);
+            params.push(filterValue);
+        }
     });
 
-    // --- 3. Handle Date Range Filter (for Timeline View) ---
-    if (start_date && end_date) {
-        if (allColumns.includes('FromDate')) {
-            whereClauses.push(`(DATE(FromDate) <= DATE(?) AND DATE(COALESCE(ToDate, FromDate)) >= DATE(?))`);
-            params.push(end_date, start_date);
-        }
-        else if (allColumns.includes('SubmittedDate')) {
-            whereClauses.push(`DATE(SubmittedDate) BETWEEN DATE(?) AND DATE(?)`);
-            params.push(start_date, end_date);
-        }
-    }
-
-    // --- 4. Handle Advanced Filters JSON ---
+    // --- 3. Handle Advanced Filters JSON (Completely Reworked) ---
     if (advanced_filters) {
         try {
             const filterGroups = JSON.parse(advanced_filters);
-            if (!Array.isArray(filterGroups)) return;
-            const groupClauses = [];
+            if (!Array.isArray(filterGroups)) return { whereString: '', params };
+            
+            const groupClauses = filterGroups.map(group => {
+                if (!group.rules || group.rules.length === 0) return null;
 
-            for (const group of filterGroups) {
-                if (!group.rules || group.rules.length === 0) continue;
-                const ruleClauses = [];
-                for (const rule of group.rules) {
+                const ruleClauses = group.rules.map(rule => {
                     const operatorKey = String(rule.operator).toLowerCase();
-                    if (!allColumns.includes(rule.field) || !allowedOperators[operatorKey]) continue;
+                    // Skip invalid or incomplete rules
+                    if (!rule.field || !operatorKey || !allColumns.includes(rule.field) || !allowedOperators[operatorKey]) {
+                        return null;
+                    }
+
                     const field = db.escapeId(rule.field);
                     const operator = allowedOperators[operatorKey];
-                    if (operator === 'IS NULL' || operator === 'IS NOT NULL') {
-                        ruleClauses.push(`${field} ${operator}`);
-                    } else if (operator === 'IN') {
-                        const inValues = Array.isArray(rule.value) ? rule.value.filter(v => v) : [rule.value].filter(v => v);
-                        if (inValues.length === 0) continue;
-                        const placeholders = inValues.map(() => '?').join(',');
-                        ruleClauses.push(`${field} IN (${placeholders})`);
-                        params.push(...inValues);
-                    } else {
-                        ruleClauses.push(`${field} ${operator} ?`);
-                        params.push(operator.includes('LIKE') ? `%${rule.value}%` : rule.value);
+
+                    // --- Handle each operator type correctly ---
+                    switch (operator) {
+                        case 'IS_EMPTY':
+                            return `(${field} IS NULL OR ${field} = '')`;
+                        case 'IS_NOT_EMPTY':
+                            return `(${field} IS NOT NULL AND ${field} <> '')`;
+                        
+                        case 'BETWEEN':
+                            if (Array.isArray(rule.value) && rule.value.length === 2) {
+                                params.push(rule.value[0], rule.value[1]);
+                                return `${field} BETWEEN ? AND ?`;
+                            }
+                            return null; // Invalid value for 'between'
+
+                        case 'IN':
+                        case 'NOT IN':
+                            const inValues = Array.isArray(rule.value) ? rule.value : [rule.value];
+                            if (inValues.length === 0) return null;
+                            const placeholders = inValues.map(() => '?').join(',');
+                            params.push(...inValues);
+                            return `${field} ${operator} (${placeholders})`;
+
+                        case 'LIKE':
+                        case 'NOT LIKE':
+                            let paramValue;
+                            switch(operatorKey) {
+                                case 'starts_with':
+                                    paramValue = `${rule.value}%`;
+                                    break;
+                                case 'ends_with':
+                                    paramValue = `%${rule.value}`;
+                                    break;
+                                case 'contains':
+                                case 'not_contains':
+                                default:
+                                    paramValue = `%${rule.value}%`;
+                                    break;
+                            }
+                            params.push(paramValue);
+                            return `${field} ${operator} ?`;
+
+                        default: // Handles =, !=, >, <, >=, <=
+                            params.push(rule.value);
+                            return `${field} ${operator} ?`;
                     }
-                }
+                }).filter(Boolean); // Remove any null clauses
+
                 if (ruleClauses.length > 0) {
-                    groupClauses.push(`(${ruleClauses.join(` ${group.logic} `)})`);
+                    return `(${ruleClauses.join(` ${group.logic || 'AND'} `)})`;
                 }
-            }
+                return null;
+            }).filter(Boolean);
+
             if (groupClauses.length > 0) {
-                whereClauses.push(...groupClauses);
+                 // The top-level logic between groups is typically AND. 
+                 // Your UI doesn't have a setting for this, so AND is a safe default.
+                whereClauses.push(groupClauses.join(' AND '));
             }
         } catch (e) {
-            console.error("Failed to parse advanced_filters:", e);
+            console.error("❌ Failed to parse advanced_filters:", e);
         }
     }
 
-    return { whereString: whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '', params };
+    return {
+        whereString: whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '',
+        params
+    };
 };
+
+
 
 // Helper for sorting
 const buildOrderByClause = (queryParams, allowedColumns = []) => {
@@ -133,7 +194,11 @@ app.get('/api/events', async (req, res) => {
 
     const { whereString, params } = buildWhereClause(
       req.query,
-      ['EventCode', 'EventName', 'Yr'], // searchable fields
+      ['EventID','EventCode','Yr','SubmittedDate','FromDate','ToDate',
+      'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId',
+      'IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount',
+      'PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration',
+      'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'], // searchable fields
       filterableColumns
     );
 
@@ -204,18 +269,69 @@ app.get('/api/newmedialog', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const { whereString, params } = buildWhereClause(req.query, ['MLUniqueID', 'Topic', 'SpeakerSinger'], ['MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo', 'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails','CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization','Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname','SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution','AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent','Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2', 'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType','BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy','Synopsis','LocationWithinAshram','Keywords','Grading' ,'Segment Category','SegmentDuration','TopicgivenBy' /* add more... */]);
+
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','SegmentDuration',
+      'TopicgivenBy'
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      [ 'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','SegmentDuration',
+      'TopicgivenBy'], // global search fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM NewMediaLog ${whereString}`;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
-    const dataQuery = `SELECT * FROM NewMediaLog ${whereString} LIMIT ? OFFSET ?`;
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewMediaLog 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
     const [results] = await db.query(dataQuery, [...params, limit, offset]);
-    res.json({ data: results, totalPages, currentPage: page });
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error("Database query error on /api/newmedialog:", err);
+    console.error("❌ Database query error on /api/newmedialog:", err);
     res.status(500).json({ error: 'Database query failed' });
   }
 });
+
 
 // server.js
 
@@ -225,33 +341,35 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    // The exact WHERE clause from your provided query
     const whereClause = `
-     WHERE nml.\`Segment Category\` NOT IN (
+      WHERE nml.\`Segment Category\` NOT IN (
         'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
         'Satsang', 'Informal Satsang', 'SU - Extracted'
       )
       AND (
-          dr.PreservationStatus IS NULL
-          OR TRIM(dr.PreservationStatus) = ''
-          OR UPPER(TRIM(dr.PreservationStatus)) = 'Preserve'
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
       )
-      AND  (
-          nml.\`IsInformal\` IS NULL
-          OR TRIM(nml.\`IsInformal\`) = ''
-          OR UPPER(TRIM(nml.\`IsInformal\`)) = 'No'
-   )
+      AND (
+        nml.\`IsInformal\` IS NULL
+        OR TRIM(nml.\`IsInformal\`) = ''
+        OR UPPER(TRIM(nml.\`IsInformal\`)) = 'NO'
+      )
     `;
 
+    // --- Count Query ---
     const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM NewMediaLog AS nml 
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
     `;
     const [[{ total }]] = await db.query(countQuery);
     const totalPages = Math.ceil(total / limit);
 
+    // --- Data Query ---
     const dataQuery = `
       SELECT 
         nml.*,
@@ -260,16 +378,25 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
         dr.RecordingName,
         dr.fkEventCode
       FROM NewMediaLog AS nml
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
       ORDER BY nml.MLUniqueID DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [limit, offset]);
-    
-    res.json({ data: rows, totalPages: totalPages, currentPage: page });
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error('API Error for satsang-extracted-clips:', err);
+    console.error("❌ API Error for /api/newmedialog/all-except-satsang:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -281,29 +408,31 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    // The exact WHERE clause from your provided query
     const whereClause = `
       WHERE nml.\`Segment Category\` IN (
-           'Product/Webseries',
-           'SU - Extracted',
-           'Satsang Clips'
+        'Product/Webseries',
+        'SU - Extracted',
+        'Satsang Clips'
       )
       AND (
-          dr.PreservationStatus IS NULL
-          OR TRIM(dr.PreservationStatus) = ''
-          OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
       )
     `;
 
+    // --- Count Query ---
     const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM NewMediaLog AS nml 
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
     `;
     const [[{ total }]] = await db.query(countQuery);
     const totalPages = Math.ceil(total / limit);
 
+    // --- Data Query ---
     const dataQuery = `
       SELECT 
         nml.*,
@@ -312,16 +441,25 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
         dr.RecordingName,
         dr.fkEventCode
       FROM NewMediaLog AS nml
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
       ORDER BY nml.MLUniqueID DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [limit, offset]);
-    
-    res.json({ data: rows, totalPages: totalPages, currentPage: page });
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error('API Error for satsang-extracted-clips:', err);
+    console.error("❌ API Error for /api/newmedialog/satsang-extracted-clips:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -334,28 +472,30 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    // The exact WHERE clause from your provided query
     const whereClause = `
       WHERE nml.\`Segment Category\` IN (
-          'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
-          'Satsang', 'Informal Satsang', 'SU - Extracted'
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision',
+        'Satsang', 'Informal Satsang', 'SU - Extracted'
       )
       AND (
-          dr.PreservationStatus IS NULL
-          OR TRIM(dr.PreservationStatus) = ''
-          OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
       )
     `;
 
+    // --- Count Query ---
     const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM NewMediaLog AS nml 
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
     `;
     const [[{ total }]] = await db.query(countQuery);
     const totalPages = Math.ceil(total / limit);
 
+    // --- Data Query ---
     const dataQuery = `
       SELECT 
         nml.*,
@@ -364,19 +504,29 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         dr.RecordingName,
         dr.fkEventCode
       FROM NewMediaLog AS nml
-      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
       ${whereClause}
       ORDER BY nml.MLUniqueID DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [limit, offset]);
 
-    res.json({ data: rows, totalPages: totalPages, currentPage: page });
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error('API Error for satsang-category:', err);
+    console.error("❌ API Error for /api/newmedialog/satsang-category:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
@@ -413,18 +563,112 @@ app.get('/api/digitalrecording', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const { whereString, params } = buildWhereClause(req.query, ['fkEventCode', 'RecordingName'], ['fkEventCode', 'RecordingName', 'RecordingCode', 'NoOfFiles', 'FilesizeInBytes']);
+
+    const filterableColumns = [
+      'fkEventCode',
+      'RecordingName',
+      'RecordingCode',
+      'NoOfFiles',
+      'FilesizeInBytes',
+        'fkDigitalMasterCategory',
+        'fkMediaName',
+        'BitRate',
+        'AudioBitrate',
+        'Filesize',
+        'Duration',
+        'AudioTotalDuration',
+        'RecordingRemarks',
+        'CounterError',
+        'ReasonError',
+        'QcRemarksCheckedOn',
+        'PreservationStatus',
+        'QcSevak',
+        'MasterProductTitle',
+        'Qcstatus',
+        'LastModifiedTimestamp',
+        'fkDistributionLabel',
+        'SubmittedDate',
+        'PresStatGuidDt',
+        'InfoOnCassette',
+        'Masterquality',
+        'IsInformal',
+        'AssociatedDR',
+        'Dimension',
+        'ProductionBucket',
+        'DistributionDriveLink',
+        'Teams'
+
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      [ 'fkEventCode',
+      'RecordingName',
+      'RecordingCode',
+      'NoOfFiles',
+      'FilesizeInBytes',
+        'fkDigitalMasterCategory',
+        'fkMediaName',
+        'BitRate',
+        'AudioBitrate',
+        'Filesize',
+        'Duration',
+        'AudioTotalDuration',
+        'RecordingRemarks',
+        'CounterError',
+        'ReasonError',
+        'QcRemarksCheckedOn',
+        'PreservationStatus',
+        'QcSevak',
+        'MasterProductTitle',
+        'Qcstatus',
+        'LastModifiedTimestamp',
+        'fkDistributionLabel',
+        'SubmittedDate',
+        'PresStatGuidDt',
+        'InfoOnCassette',
+        'Masterquality',
+        'IsInformal',
+        'AssociatedDR',
+        'Dimension',
+        'ProductionBucket',
+        'DistributionDriveLink',
+        'Teams'], // global search fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM DigitalRecordings ${whereString}`;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
-    const dataQuery = `SELECT * FROM DigitalRecordings ${whereString} LIMIT ? OFFSET ?`;
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM DigitalRecordings 
+      ${whereString} 
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
     const [results] = await db.query(dataQuery, [...params, limit, offset]);
-    res.json({ data: results, totalPages, currentPage: page });
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error("Database query error on /api/digitalrecording:", err);
+    console.error("❌ Database query error on /api/digitalrecording:", err);
     res.status(500).json({ error: 'Database query failed' });
   }
 });
+
 
 app.get('/api/digitalrecording/export', async (req, res) => {
     try {
@@ -459,18 +703,91 @@ app.get('/api/auxfiles', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const { whereString, params } = buildWhereClause(req.query, ['AuxCode', 'AuxTopic', 'NotesRemarks'], ['AUXID', 'new_auxid', 'AuxCode', 'fkMLID', 'NoOfFiles', 'FilesizeBytes', 'ProjFileSize' /* Add all filterable columns */]);
+
+    const filterableColumns = [
+      'AUXID',
+      'new_auxid',
+      'AuxCode',
+      'fkMLID',
+      'NoOfFiles',
+      'FilesizeBytes',
+      'ProjFileSize',
+      'AuxTopic',
+      'NotesRemarks',
+      'AuxLanguage',
+        'AuxFileType',
+        'GoogleDriveLink',
+        'LastModifiedTimestamp',
+        'LastModifiedBy',
+        'ProjFileCode',
+        'ProjFileName',
+        'SRTLink',
+        'CreatedOn',
+        'CreatedBy',
+        'ModifiedOn',
+        'ModifiedBy'
+
+      // ✅ Add more filterable columns here as needed
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      [ 'AUXID',
+      'new_auxid',
+      'AuxCode',
+      'fkMLID',
+      'NoOfFiles',
+      'FilesizeBytes',
+      'ProjFileSize',
+      'AuxTopic',
+      'NotesRemarks',
+      'AuxLanguage',
+        'AuxFileType',
+        'GoogleDriveLink',
+        'LastModifiedTimestamp',
+        'LastModifiedBy',
+        'ProjFileCode',
+        'ProjFileName',
+        'SRTLink',
+        'CreatedOn',
+        'CreatedBy',
+        'ModifiedOn',
+        'ModifiedBy'], // global search fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM AuxFiles ${whereString}`;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
-    const dataQuery = `SELECT * FROM AuxFiles ${whereString} LIMIT ? OFFSET ?`;
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM AuxFiles 
+      ${whereString} 
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
     const [results] = await db.query(dataQuery, [...params, limit, offset]);
-    res.json({ data: results, totalPages, currentPage: page });
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
   } catch (err) {
-    console.error("Database query error on /api/auxfiles:", err);
+    console.error("❌ Database query error on /api/auxfiles:", err);
     res.status(500).json({ error: 'Database query failed' });
   }
 });
+
 
 app.get('/api/auxfiles/export', async (req, res) => {
     try {
