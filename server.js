@@ -834,55 +834,68 @@ app.get('/api/auxfiles/:fkMLID', async (req, res) => {
 // --- ENDPOINTS FOR SINGLE RECORDS ---
 
 // Endpoint to get a single event by EventCode
-app.get('/api/events/:eventCode', async (req, res) => { // Added async
-    const { eventCode } = req.params;
-    try {
-        const [results] = await db.query('SELECT * FROM Events WHERE EventCode = ?', [eventCode]);
+// --- Get a single Event by EventCode ---
+app.get('/api/events/:eventCode', async (req, res) => {
+  const { eventCode } = req.params;
+  try {
+    const [results] = await db.query(
+      'SELECT * FROM Events WHERE EventCode = ?',
+      [eventCode]
+    );
 
-        if (results.length === 0) {
-            return res.status(404).json({ message: `Event with code ${eventCode} not found.` });
-        }
-        res.json(results[0]);
-    } catch (err) {
-        console.error("Database query error on single event:", err);
-        return res.status(500).json({ error: 'Database query failed' });
+    if (!results || results.length === 0) {
+      return res.status(404).json({ message: `Event with code ${eventCode} not found.` });
     }
+
+    res.json(results[0]);
+  } catch (err) {
+    console.error("Database query error on single event:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
 });
 
-// Endpoint to get a single digital recording
-app.get('/api/digitalrecording/:recordingCode', async (req, res) => { // Added async
-    const { recordingCode } = req.params;
-    try {
-        const [results] = await db.query('SELECT * FROM DigitalRecordings WHERE RecordingCode = ?', [recordingCode]);
 
-        if (results.length === 0) {
-            return res.status(404).json({ message: `Digital Recording with code ${recordingCode} not found.` });
-        }
-        res.json(results[0]);
-    } catch (err) {
-        console.error("Database query error on single digital recording:", err);
-        return res.status(500).json({ error: 'Database query failed' });
+// --- Get a single Digital Recording by RecordingCode ---
+app.get('/api/digitalrecordings/:recordingCode', async (req, res) => {
+  const { recordingCode } = req.params;
+  try {
+    const [results] = await db.query(
+      'SELECT * FROM DigitalRecordings WHERE RecordingCode = ?',
+      [recordingCode]
+    );
+
+    if (!results || results.length === 0) {
+      return res.status(404).json({ message: `Digital Recording with code ${recordingCode} not found.` });
     }
+
+    res.json(results[0]);
+  } catch (err) {
+    console.error("Database query error on single digital recording:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
 });
 
-// --- NEW ENDPOINT FOR SINGLE NEW MEDIA LOG ---
+
+// --- Get a single New Media Log by MLUniqueID ---
 app.get('/api/newmedialog/:mlid', async (req, res) => {
-    // FIX: Use 'mlid' to match the route parameter name
-    const { mlid } = req.params;
-    try {
-        // FIX: Use the 'mlid' variable in the query
-        const [results] = await db.query('SELECT * FROM NewMediaLog WHERE MLUniqueID = ?', [mlid]);
+  const { mlid } = req.params;
+  try {
+    const [results] = await db.query(
+      'SELECT * FROM NewMediaLog WHERE MLUniqueID = ?',
+      [mlid]
+    );
 
-        if (results.length === 0) {
-            // FIX: Use 'mlid' in the error message for correct debugging
-            return res.status(404).json({ message: `Media Log with ID ${mlid} not found.` });
-        }
-        res.json(results[0]);
-    } catch (err) {
-        console.error("Database query error on single media log:", err);
-        return res.status(500).json({ error: 'Database query failed' });
+    if (!results || results.length === 0) {
+      return res.status(404).json({ message: `Media Log with ID ${mlid} not found.` });
     }
+
+    res.json(results[0]);
+  } catch (err) {
+    console.error("Database query error on single media log:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
 });
+
 
 app.get('/api/dashboard/countries-visited', async (req, res) => {
     const { year } = req.query;
