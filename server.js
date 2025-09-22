@@ -186,7 +186,7 @@ app.get('/api/events', async (req, res) => {
 
     const filterableColumns = [
       'EventID','EventCode','Yr','SubmittedDate','FromDate','ToDate',
-      'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId',
+      'EventName','fkEventCategory','EventRemarks','EventMonth','CommonId',
       'IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount',
       'PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration',
       'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'
@@ -195,7 +195,7 @@ app.get('/api/events', async (req, res) => {
     const { whereString, params } = buildWhereClause(
       req.query,
       ['EventID','EventCode','Yr','SubmittedDate','FromDate','ToDate',
-      'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId',
+      'EventName','fkEventCategory','EventRemarks','EventMonth','CommonId',
       'IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount',
       'PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration',
       'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'], // searchable fields
@@ -272,7 +272,7 @@ app.get('/api/newmedialog', async (req, res) => {
 
     const filterableColumns = [
       'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
       'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
       'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
       'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
@@ -280,14 +280,14 @@ app.get('/api/newmedialog', async (req, res) => {
       'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
-      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','SegmentDuration',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
       'TopicgivenBy'
     ];
 
     const { whereString, params } = buildWhereClause(
       req.query,
       [ 'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
       'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
       'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
       'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
@@ -295,7 +295,7 @@ app.get('/api/newmedialog', async (req, res) => {
       'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
-      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','SegmentDuration',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
       'TopicgivenBy'], // global search fields
       filterableColumns
     );
