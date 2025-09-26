@@ -14,27 +14,16 @@ app.use(express.json());
 // ✅ UPGRADED: This function translates API parameters (start_date) to database columns (FromDate)
 // It uses DATE() for robust, timezone-agnostic comparisons.
 // ✅ Refactored buildWhereClause (no start_date / end_date filter)
+// src/server/index.js
+
+// ✅ REPLACEMENT for your buildWhereClause function
 const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
-    // This map now perfectly matches the operators sent by the frontend.
+    // This map correctly matches the operators sent by the frontend.
     const allowedOperators = {
-        // Text/General
-        'contains': 'LIKE',
-        'not_contains': 'NOT LIKE',
-        'equals': '=',
-        'not_equals': '!=',
-        'starts_with': 'LIKE',
-        'ends_with': 'LIKE',
-        'in': 'IN',
-        'not_in': 'NOT IN',
-        // Number/Date specific
-        'greater': '>',
-        'greater_equal': '>=',
-        'less': '<',
-        'less_equal': '<=',
-        // Special operators handled by custom logic below
-        'is_empty': 'IS_EMPTY',
-        'is_not_empty': 'IS_NOT_EMPTY',
-        'between': 'BETWEEN',
+        'contains': 'LIKE', 'not_contains': 'NOT LIKE', 'equals': '=', 'not_equals': '!=',
+        'starts_with': 'LIKE', 'ends_with': 'LIKE', 'in': 'IN', 'not_in': 'NOT IN',
+        'greater': '>', 'greater_equal': '>=', 'less': '<', 'less_equal': '<=',
+        'is_empty': 'IS_EMPTY', 'is_not_empty': 'IS_NOT_EMPTY', 'between': 'BETWEEN',
     };
 
     const { page, limit, search, advanced_filters, ...filters } = queryParams;
@@ -52,7 +41,6 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
 
     // --- 2. Handle Simple Key-Value Filters (Unchanged) ---
     Object.keys(filters).forEach(key => {
-        // ... (this part of your function was correct and remains the same)
         const filterValue = queryParams[key];
         const fieldName = key.replace(/_min|_max$/, '');
         if (allColumns.length > 0 && !allColumns.includes(fieldName)) return;
@@ -72,79 +60,94 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
     if (advanced_filters) {
         try {
             const filterGroups = JSON.parse(advanced_filters);
-            if (!Array.isArray(filterGroups)) return { whereString: '', params };
-            
-            const groupClauses = filterGroups.map(group => {
-                if (!group.rules || group.rules.length === 0) return null;
+            if (!Array.isArray(filterGroups) || filterGroups.length === 0) {
+                return { whereString: '', params };
+            }
 
-                const ruleClauses = group.rules.map(rule => {
+            const groupSqlParts = []; // Will hold final SQL for each group like "(c1 AND c2)"
+
+            filterGroups.forEach((group, groupIndex) => {
+                if (!group.rules || group.rules.length === 0) return;
+
+                const ruleSqlParts = []; // Will hold individual rule parts like "field = ?", "AND field > ?"
+
+                group.rules.forEach((rule, ruleIndex) => {
                     const operatorKey = String(rule.operator).toLowerCase();
-                    // Skip invalid or incomplete rules
                     if (!rule.field || !operatorKey || !allColumns.includes(rule.field) || !allowedOperators[operatorKey]) {
-                        return null;
+                        return; // Skip invalid rule
                     }
 
                     const field = db.escapeId(rule.field);
-                    const operator = allowedOperators[operatorKey];
+                    const dbOperator = allowedOperators[operatorKey];
+                    let ruleClause = null;
+                    const ruleParams = [];
 
-                    // --- Handle each operator type correctly ---
-                    switch (operator) {
+                    // --- Generate clause for this specific rule ---
+                    switch (dbOperator) {
                         case 'IS_EMPTY':
-                            return `(${field} IS NULL OR ${field} = '')`;
+                            ruleClause = `(${field} IS NULL OR ${field} = '')`;
+                            break;
                         case 'IS_NOT_EMPTY':
-                            return `(${field} IS NOT NULL AND ${field} <> '')`;
-                        
+                            ruleClause = `(${field} IS NOT NULL AND ${field} <> '')`;
+                            break;
                         case 'BETWEEN':
                             if (Array.isArray(rule.value) && rule.value.length === 2) {
-                                params.push(rule.value[0], rule.value[1]);
-                                return `${field} BETWEEN ? AND ?`;
+                                ruleParams.push(rule.value[0], rule.value[1]);
+                                ruleClause = `${field} BETWEEN ? AND ?`;
                             }
-                            return null; // Invalid value for 'between'
-
+                            break;
                         case 'IN':
                         case 'NOT IN':
                             const inValues = Array.isArray(rule.value) ? rule.value : [rule.value];
-                            if (inValues.length === 0) return null;
-                            const placeholders = inValues.map(() => '?').join(',');
-                            params.push(...inValues);
-                            return `${field} ${operator} (${placeholders})`;
-
+                            if (inValues.length > 0) {
+                                const placeholders = inValues.map(() => '?').join(',');
+                                ruleParams.push(...inValues);
+                                ruleClause = `${field} ${dbOperator} (${placeholders})`;
+                            }
+                            break;
                         case 'LIKE':
                         case 'NOT LIKE':
-                            let paramValue;
-                            switch(operatorKey) {
-                                case 'starts_with':
-                                    paramValue = `${rule.value}%`;
-                                    break;
-                                case 'ends_with':
-                                    paramValue = `%${rule.value}`;
-                                    break;
-                                case 'contains':
-                                case 'not_contains':
-                                default:
-                                    paramValue = `%${rule.value}%`;
-                                    break;
-                            }
-                            params.push(paramValue);
-                            return `${field} ${operator} ?`;
-
+                            let paramValue = `%${rule.value}%`; // Default for 'contains'
+                            if (operatorKey === 'starts_with') paramValue = `${rule.value}%`;
+                            if (operatorKey === 'ends_with') paramValue = `%${rule.value}`;
+                            ruleParams.push(paramValue);
+                            ruleClause = `${field} ${dbOperator} ?`;
+                            break;
                         default: // Handles =, !=, >, <, >=, <=
-                            params.push(rule.value);
-                            return `${field} ${operator} ?`;
+                            ruleParams.push(rule.value);
+                            ruleClause = `${field} ${dbOperator} ?`;
+                            break;
                     }
-                }).filter(Boolean); // Remove any null clauses
 
-                if (ruleClauses.length > 0) {
-                    return `(${ruleClauses.join(` ${group.logic || 'AND'} `)})`;
+                    // --- Assemble the rule with its logic operator ---
+                    if (ruleClause) {
+                        // For any rule after the first, prepend its logic (AND/OR)
+                        if (ruleIndex > 0) {
+                            ruleSqlParts.push(rule.logic || 'AND');
+                        }
+                        ruleSqlParts.push(ruleClause);
+                        params.push(...ruleParams);
+                    }
+                });
+
+                // --- Assemble the group with its logic operator ---
+                if (ruleSqlParts.length > 0) {
+                    const groupClause = `(${ruleSqlParts.join(' ')})`;
+                    
+                    // For any group after the first, prepend its logic (AND/OR)
+                    if (groupIndex > 0) {
+                        // The logic is defined on the group itself. The UI default for new groups is OR.
+                        groupSqlParts.push(group.logic || 'OR');
+                    }
+                    groupSqlParts.push(groupClause);
                 }
-                return null;
-            }).filter(Boolean);
+            });
 
-            if (groupClauses.length > 0) {
-                 // The top-level logic between groups is typically AND. 
-                 // Your UI doesn't have a setting for this, so AND is a safe default.
-                whereClauses.push(groupClauses.join(' AND '));
+            if (groupSqlParts.length > 0) {
+                // Wrap the entire advanced filter block in parentheses for safety
+                whereClauses.push(`(${groupSqlParts.join(' ')})`);
             }
+
         } catch (e) {
             console.error("❌ Failed to parse advanced_filters:", e);
         }
@@ -155,7 +158,6 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = []) => {
         params
     };
 };
-
 
 
 // Helper for sorting
