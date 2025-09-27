@@ -1,8 +1,10 @@
 // src/server/index.js
 
 const express = require('express');
-const cors = require('cors');
+const cors = require("cors");
 const db = require('./db'); // This now imports the mysql2 pool
+const { google } = require("googleapis");
+const nodemailer = require("nodemailer"); // Add this at the top of the file
 require('dotenv').config();
 
 const app = express();
@@ -1588,6 +1590,67 @@ app.get('/api/dashboard/padhramani-events-by-group', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch grouped Padhramani event data' });
     }
 });
+
+// --- Send Invitation Endpoint ---
+app.post("/api/send-invitation", async (req, res) => {
+  const { email, role, teams, message, appLink } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ message: "Recipient email is required." });
+  }
+
+  try {
+    const transporter = await createTransporter();
+
+    const mailOptions = {
+      from: "your-email@gmail.com", // Your Gmail address
+      to: email,
+      subject: "You're Invited to Join Our App!",
+      html: `
+        <p>Hello,</p>
+        <p>You have been invited to join our app as a <strong>${role}</strong>.</p>
+        <p>Teams: ${teams.join(", ") || "None"}</p>
+        <p>${message || ""}</p>
+        <p><a href="${appLink}" target="_blank">Click here to join</a></p>
+        <p>Best regards,<br>Your App Team</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({ message: "Invitation sent successfully." });
+  } catch (error) {
+    console.error("Error sending email:", error);
+    res.status(500).json({ message: "Failed to send invitation." });
+  }
+});
+
+// OAuth2 Configuration
+
+const createTransporter = async () => {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.CLIENT_ID,
+    process.env.CLIENT_SECRET,
+    process.env.REDIRECT_URI || "https://developers.google.com/oauthplayground"
+  );
+
+  oauth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
+
+  const accessToken = await oauth2Client.getAccessToken();
+
+  return nodemailer.createTransport({
+    service: "Gmail",
+    auth: {
+      type: "OAuth2",
+      user: process.env.EMAIL_USER, // Your Gmail address
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.REFRESH_TOKEN,
+      accessToken: accessToken.token,
+    },
+  });
+};
+
 // Start server
 const PORT = process.env.PORT || 3600;
 app.listen(PORT, () => {
