@@ -4,12 +4,61 @@ const express = require('express');
 const cors = require("cors");
 const db = require('./db'); // This now imports the mysql2 pool
 const { google } = require("googleapis");
-const nodemailer = require("nodemailer"); // Add this at the top of the file
-require('dotenv').config();
-
+const nodemailer = require("nodemailer");
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  "https://developers.google.com/oauthplayground"
+);
+oAuth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
+
+async function sendInvitationEmail({ email, role, teams, message, appLink }) {
+  const accessToken = await oAuth2Client.getAccessToken();
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      type: "OAuth2",
+      user: process.env.EMAIL_USER,
+      clientId: process.env.CLIENT_ID,
+      clientSecret: process.env.CLIENT_SECRET,
+      refreshToken: process.env.REFRESH_TOKEN,
+      accessToken: accessToken.token,
+    },
+  });
+
+  const mailOptions = {
+    from: `"AV Data Library" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "You're Invited!",
+    text: `Role: ${role}\nTeams: ${teams.join(", ")}\nMessage: ${message}\nApp Link: ${appLink}`,
+    html: `
+      <p><strong>Role:</strong> ${role}</p>
+      <p><strong>Teams:</strong> ${teams.join(", ")}</p>
+      <p><strong>Message:</strong> ${message}</p>
+      <p><a href="${appLink}">Join the app</a></p>
+    `,
+  };
+
+  return transporter.sendMail(mailOptions);
+}
+
+app.post('/send-invitation', async (req, res) => {
+  const { email, role, teams, message, appLink } = req.body;
+  try {
+    await sendInvitationEmail({ email, role, teams, message, appLink });
+    res.status(200).json({ message: "Invitation sent successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+require('dotenv').config();
+
 
 
 
@@ -1651,8 +1700,40 @@ const createTransporter = async () => {
   });
 };
 
+// Google Sheets setup
+const SHEET_ID = "1GaCTwU_LUFF2B9NbBVzenwRjrW8sPvUJMkKzDUOdme0";
+const SHEET_RANGE = "Sheet1!A2:J";
+const credentials = require("./service-account.json");
+
+const auth = new google.auth.GoogleAuth({
+  credentials,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+app.get("/api/users", async (req, res) => {
+  const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: SHEET_RANGE,
+  });
+  const users = (result.data.values || []).map(row => ({
+    id: row[0],
+    name: row[1],
+    email: row[2],
+    role: row[3],
+    status: row[4],
+    joinedDate: row[5],
+    lastActive: row[6],
+    teams: row[7] ? row[7].split(",") : [],
+    department: row[8],
+    location: row[9],
+  }));
+  res.json(users);
+});
+
 // Start server
 const PORT = process.env.PORT || 3600;
 app.listen(PORT, () => {
+ 
   console.log(`🚀 Server running on port ${PORT}`);
 });
