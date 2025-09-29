@@ -1702,7 +1702,6 @@ const createTransporter = async () => {
 
 // Google Sheets setup
 const SHEET_ID = "1GaCTwU_LUFF2B9NbBVzenwRjrW8sPvUJMkKzDUOdme0";
-const SHEET_RANGE = "Sheet1!A2:J";
 const credentials = require("./service-account.json");
 
 const auth = new google.auth.GoogleAuth({
@@ -1710,26 +1709,244 @@ const auth = new google.auth.GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-app.get("/api/users", async (req, res) => {
-  const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: SHEET_RANGE,
-  });
-  const users = (result.data.values || []).map(row => ({
-    id: row[0],
-    name: row[1],
-    email: row[2],
-    role: row[3],
-    status: row[4],
-    joinedDate: row[5],
-    lastActive: row[6],
-    teams: row[7] ? row[7].split(",") : [],
-    department: row[8],
-    location: row[9],
-  }));
-  res.json(users);
+
+// --- Helper Functions for Permissions ---
+
+// Converts "Permissions" string from sheet (e.g., "Dashboard:read,write;Events:read") to an array of objects
+const parsePermissions = (permissionString) => {
+  if (!permissionString || typeof permissionString !== 'string') return [];
+  try {
+    return permissionString.split(';').map(p => {
+      const [resource, actionsStr] = p.split(':');
+      if (!resource || !actionsStr) return null;
+      return { resource, actions: actionsStr.split(',') };
+    }).filter(Boolean); // Filter out any null entries from bad formatting
+  } catch (e) {
+    console.error("Could not parse permissions string:", permissionString, e);
+    return [];
+  }
+};
+
+// Formats permissions array into a string for the sheet
+const formatPermissions = (permissionsArray) => {
+    if (!permissionsArray || permissionsArray.length === 0) return "";
+    return permissionsArray.map(p => `${p.resource}:${p.actions.join(',')}`).join(';');
+};
+
+
+// ===================================================================================
+// --- API ENDPOINTS ---
+// ===================================================================================
+
+// --- GET ALL USERS ---
+app.get("/api/users", async (_req, res) => {
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      // Read all columns from A to K to include permissions
+      range: "Sheet1!A2:K", 
+    });
+
+    const users = (result.data.values || []).map(row => ({
+      id: row[0],
+      name: row[1],
+      email: row[2],
+      role: row[3],
+      status: row[4],
+      joinedDate: row[5],
+      lastActive: row[6],
+      teams: row[7] ? row[7].split(",") : [],
+      department: row[8],
+      location: row[9],
+      permissions: parsePermissions(row[10]) // Parse from Column K (index 10)
+    }));
+    res.json(users);
+  } catch (err) {
+    console.error("Error fetching users from Google Sheet:", err);
+    res.status(500).json({ error: "Failed to fetch user data." });
+  }
 });
+
+// --- ADD A NEW USER ---
+app.post("/api/users", async (req, res) => {
+  const { name, email, role, department, location, teams, permissions } = req.body;
+
+  if (!name || !email || !role) {
+    return res.status(400).json({ error: "Name, email, and role are required." });
+  }
+
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+
+    const now = new Date();
+    const newId = now.getTime().toString();
+    const joinedDate = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const status = 'Active';
+    const lastActive = now.toISOString();
+
+    // Ensure teams and permissions are properly formatted
+    const formattedTeams = Array.isArray(teams) ? teams : [];
+    const formattedPermissions = permissions || [];
+
+    // Order must match your Google Sheet columns: A, B, C... K
+    const newRow = [
+      newId,
+      name,
+      email,
+      role,
+      status,
+      joinedDate,
+      lastActive,
+      formattedTeams.join(','), // Convert teams array to a comma-separated string
+      department || '',
+      location || '',
+      formatPermissions(formattedPermissions), // Save the formatted string to Column K
+    ];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: "Sheet1!A:K",
+      valueInputOption: "USER_ENTERED",
+      resource: {
+        values: [newRow],
+      },
+    });
+
+    const createdUser = {
+      id: newId,
+      name,
+      email,
+      role,
+      status,
+      joinedDate,
+      lastActive,
+      teams: formattedTeams,
+      department,
+      location,
+      permissions: formattedPermissions,
+    };
+
+    res.status(201).json(createdUser);
+  } catch (err) {
+    console.error("Error adding user to Google Sheet:", err);
+    res.status(500).json({ error: "Failed to add user." });
+  }
+});
+
+// --- DELETE A USER ---
+app.delete('/api/users/:id', async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ error: "User ID is required." });
+  }
+
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+
+    // Get the sheet metadata to retrieve the sheetId dynamically
+    const sheetMetadata = await sheets.spreadsheets.get({
+      spreadsheetId: SHEET_ID,
+    });
+    const sheetId = sheetMetadata.data.sheets[0].properties.sheetId;
+
+    // Fetch all rows in the first column (IDs)
+    const getRowsResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:A', 
+    });
+
+    const ids = getRowsResponse.data.values;
+    if (!ids || ids.length === 0) {
+      return res.status(404).json({ error: "Sheet is empty, user not found." });
+    }
+
+    // Skip the header row and find the user ID
+    const rowIndexToDelete = ids.slice(1).findIndex(row => row[0] === id);
+
+    if (rowIndexToDelete === -1) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    // Adjust the index to account for the skipped header row
+    const adjustedRowIndex = rowIndexToDelete + 1;
+
+    // Delete the row
+    const batchUpdateRequest = {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId: sheetId,
+            dimension: 'ROWS',
+            startIndex: adjustedRowIndex,
+            endIndex: adjustedRowIndex + 1,
+          },
+        },
+      }],
+    };
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      resource: batchUpdateRequest,
+    });
+
+    res.status(200).json({ message: 'User deleted successfully.' });
+  } catch (err) {
+    console.error("Error deleting user from Google Sheet:", err);
+    res.status(500).json({ error: "Failed to delete user." });
+  }
+});
+
+// --- UPDATE USER PERMISSIONS ---
+app.put('/api/users/:id/permissions', async (req, res) => {
+  const { id } = req.params;
+  const { permissions } = req.body;
+
+  if (!id || !permissions) {
+    return res.status(400).json({ error: "User ID and permissions array are required." });
+  }
+
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+
+    const getRowsResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:A',
+    });
+
+    const ids = getRowsResponse.data.values;
+    // We start searching from index 1 to skip the header row.
+    const rowIndex = ids.slice(1).findIndex(row => row[0] === id); 
+
+    if (rowIndex === -1) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const permissionsString = formatPermissions(permissions);
+    
+    // rowIndex is 0-based from the data (A2 onwards), but sheet ranges are 1-based.
+    // So, we need to add 2 to get the correct sheet row number (1 for header, 1 for 0-indexing).
+    const sheetRowNumber = rowIndex + 2; 
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `Sheet1!K${sheetRowNumber}`, // Update cell in Column K for the correct row
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[permissionsString]],
+      },
+    });
+
+    res.status(200).json({ message: 'Permissions updated successfully.' });
+  } catch (err) {
+    console.error("Error updating permissions:", err);
+    res.status(500).json({ error: "Failed to update permissions." });
+  }
+});
+
+
+
 
 // Start server
 const PORT = process.env.PORT || 3600;
