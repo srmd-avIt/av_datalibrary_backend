@@ -1712,7 +1712,8 @@ const auth = new google.auth.GoogleAuth({
 
 // --- Helper Functions for Permissions ---
 
-// Converts "Permissions" string from sheet (e.g., "Dashboard:read,write;Events:read") to an array of objects
+
+// --- Helper Functions for Permissions (Your Original Code) ---
 const parsePermissions = (permissionString) => {
   if (!permissionString || typeof permissionString !== 'string') return [];
   try {
@@ -1720,14 +1721,13 @@ const parsePermissions = (permissionString) => {
       const [resource, actionsStr] = p.split(':');
       if (!resource || !actionsStr) return null;
       return { resource, actions: actionsStr.split(',') };
-    }).filter(Boolean); // Filter out any null entries from bad formatting
+    }).filter(Boolean);
   } catch (e) {
     console.error("Could not parse permissions string:", permissionString, e);
     return [];
   }
 };
 
-// Formats permissions array into a string for the sheet
 const formatPermissions = (permissionsArray) => {
     if (!permissionsArray || permissionsArray.length === 0) return "";
     return permissionsArray.map(p => `${p.resource}:${p.actions.join(',')}`).join(';');
@@ -1943,6 +1943,912 @@ app.put('/api/users/:id/permissions', async (req, res) => {
     console.error("Error updating permissions:", err);
     res.status(500).json({ error: "Failed to update permissions." });
   }
+});
+
+
+// ✅ THIS IS THE MODIFIED ENDPOINT
+app.get('/api/users/by-email/:email', async (req, res) => {
+  const userEmailToFind = req.params.email;
+
+  if (!userEmailToFind) {
+    return res.status(400).json({ error: "Email parameter is required." });
+  }
+
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: "Sheet1!A2:K", // Ensure you are reading up to column K for permissions
+    });
+
+    const rows = result.data.values || [];
+    const userRow = rows.find(row => row[2] && row[2].toLowerCase() === userEmailToFind.toLowerCase());
+
+    if (userRow) {
+      // ✅ MODIFIED: The user object now includes the parsed permissions array
+      const user = {
+        id: userRow[0],
+        name: userRow[1],
+        email: userRow[2],
+        role: userRow[3],
+        permissions: parsePermissions(userRow[10]) // Parse permissions from column K
+      };
+      
+      console.log(`✅ Authentication successful for: ${userEmailToFind}`);
+      res.status(200).json(user);
+    } else {
+      console.log(`❌ Authentication failed. User not found: ${userEmailToFind}`);
+      res.status(404).json({ error: 'User not found in application registry.' });
+    }
+
+  } catch (err) {
+    console.error("Error looking up user by email from Google Sheet:", err);
+    res.status(500).json({ error: "Failed to verify user." });
+  }
+});
+
+// --- Endpoint to fetch data from the "Audio" table ---
+app.get('/api/audio', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'AID',
+      'AudioList',
+      'Distribution',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['AID', 'AudioList', 'Distribution'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM Audio ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM Audio 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/audio:", err);
+    res.status(500).json({ error: 'Failed to fetch audio data' });
+  }
+});
+
+
+app.get('/api/bhajan-type', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'BTID',
+      'BhajanName',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['BTID', 'BhajanName'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM BhajanTypes ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM BhajanTypes 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/bhajan-type:", err);
+    res.status(500).json({ error: 'Failed to fetch Bhajan Type data' });
+  }
+});
+
+
+app.get('/api/digital-master-category', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'DMCID',
+      'DMCategory_name',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['DMCID', 'DMCategory_name'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM DigitalMasterCategory ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM DigitalMasterCategory 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/digital-master-category:", err);
+    res.status(500).json({ error: 'Failed to fetch Digital Master Category data' });
+  }
+});
+
+
+app.get('/api/distribution-label', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'LabelID',
+      'LabelName',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['LabelID', 'LabelName'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM DistributionLabel ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM DistributionLabel 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/distribution-label:", err);
+    res.status(500).json({ error: 'Failed to fetch Distribution Label data' });
+  }
+});
+
+app.get('/api/editing-type', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'EdID',
+      'EdType',
+      'AudioVideo',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EdID', 'EdType', 'AudioVideo'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM EditingType ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM EditingType 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/editing-type:", err);
+    res.status(500).json({ error: 'Failed to fetch Editing Type data' });
+  }
+});
+
+
+app.get('/api/event-category', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'EventCategoryID',
+      'EventCategory',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EventCategoryID', 'EventCategory'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM EventCategory ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM EventCategory 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/event-category:", err);
+    res.status(500).json({ error: 'Failed to fetch Event Category data' });
+  }
+});
+
+app.get('/api/footage-type', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'FootageID',
+      'FootageTypeList',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['FootageID', 'FootageTypeList'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM FootageTypes ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM FootageTypes 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/footage-type:", err);
+    res.status(500).json({ error: 'Failed to fetch Footage Type data' });
+  }
+});
+
+
+app.get('/api/format-type', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'FTID',
+      'Type',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['FTID', 'Type'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM Format ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM Format 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/format-type:", err);
+    res.status(500).json({ error: 'Failed to fetch Format Type data' });
+  }
+});
+
+
+app.get('/api/granths', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'ID',
+      'Name',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['ID', 'Name'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM NewGranths ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewGranths 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/granths:", err);
+    res.status(500).json({ error: 'Failed to fetch Granths data' });
+  }
+});
+
+
+app.get('/api/language', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'STID',
+      'TitleLanguage',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['STID', 'TitleLanguage'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM SubTitlesLanguages ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM SubTitlesLanguages 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/language:", err);
+    res.status(500).json({ error: 'Failed to fetch Language data' });
+  }
+});
+
+
+app.get('/api/new-event-category', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'SrNo',
+      'NewEventCategoryName',
+      'LastModifiedTimestamp',
+      'MARK_DISCARD',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['SrNo', 'NewEventCategoryName'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM NewEventCategory ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewEventCategory 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-event-category:", err);
+    res.status(500).json({ error: 'Failed to fetch New Event Category data' });
+  }
+});
+
+
+app.get('/api/new-cities', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'CityID',
+      'City',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['CityID', 'City'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM NewCities ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewCities 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-cities:", err);
+    res.status(500).json({ error: 'Failed to fetch New Cities data' });
+  }
+});
+
+
+app.get('/api/new-countries', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'CountryID',
+      'Country',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['CountryID', 'Country'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM NewCountries ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewCountries 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-countries:", err);
+    res.status(500).json({ error: 'Failed to fetch New Countries data' });
+  }
+});
+
+app.get('/api/new-states', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'StateID',
+      'State',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['StateID', 'State'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM NewStates ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM NewStates 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-states:", err);
+    res.status(500).json({ error: 'Failed to fetch New States data' });
+  }
+});
+
+
+app.get('/api/occasions', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'OccasionID',
+      'Occasion',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['OccasionID', 'Occasion'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM Occasions ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM Occasions 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/occasions:", err);
+    res.status(500).json({ error: 'Failed to fetch Occasions data' });
+  }
+});
+
+
+
+
+
+app.get('/api/topic-number-source', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'TNID',
+      'TNName',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TNID', 'TNName'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM TopicNumberSource ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM TopicNumberSource 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-number-source:", err);
+    res.status(500).json({ error: 'Failed to fetch Topic Number Source data' });
+  }
+});
+
+
+// ✅ ADDED: NEW ENDPOINT TO UPDATE LAST ACTIVE STATUS
+app.put('/api/users/:id/last-active', async (req, res) => {
+    const { id } = req.params;
+    const { lastActive } = req.body; // Expecting an ISO string like "2023-10-27T10:00:00.000Z"
+
+    if (!id || !lastActive) {
+        return res.status(400).json({ error: "User ID and lastActive timestamp are required." });
+    }
+
+    try {
+        const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+        const getRowsResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: SHEET_ID,
+            range: 'Sheet1!A:A', // Read all IDs in column A
+        });
+
+        const ids = getRowsResponse.data.values;
+        if (!ids) {
+            return res.status(404).json({ error: "User not found in sheet." });
+        }
+        
+        // Find the index of the user's ID, skipping the header row
+        const rowIndex = ids.slice(1).findIndex(row => row[0] === id);
+
+        if (rowIndex === -1) {
+            return res.status(404).json({ error: "User not found." });
+        }
+
+        // The sheet row number is the 0-based index + 2 (1 for header, 1 for 1-based range)
+        const sheetRowNumber = rowIndex + 2;
+
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: SHEET_ID,
+            range: `Sheet1!G${sheetRowNumber}`, // Update cell in Column G (Last Active)
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [[lastActive]],
+            },
+        });
+
+        res.status(200).json({ message: 'Last active timestamp updated successfully.' });
+    } catch (err) {
+        console.error("Error updating last active status:", err);
+        res.status(500).json({ error: "Failed to update last active status." });
+    }
 });
 
 
