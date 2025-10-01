@@ -884,6 +884,38 @@ app.get('/api/auxfiles/:fkMLID', async (req, res) => {
 });
 
 
+app.put('/api/aux/:new_auxid', async (req, res) => {
+  const { new_auxid } = req.params; // Extract the `new_auxid` from the URL
+  const { SRTLink } = req.body; // Extract the `SRTLink` from the request body
+
+  if (!new_auxid) {
+    return res.status(400).json({ error: "Auxiliary file ID (new_auxid) is required." });
+  }
+
+  if (!SRTLink) {
+    return res.status(400).json({ error: "SRTLink is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE AuxFiles
+      SET SRTLink = ?, ModifiedOn = NOW()
+      WHERE new_auxid = ?
+    `;
+
+    const [result] = await db.query(query, [SRTLink, new_auxid]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Auxiliary file with ID ${new_auxid} not found.` });
+    }
+
+    res.status(200).json({ message: "SRT Link updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/aux/:new_auxid:", err);
+    res.status(500).json({ error: "Failed to update SRT Link." });
+  }
+});
+
 // --- ENDPOINTS FOR SINGLE RECORDS ---
 
 // Endpoint to get a single event by EventCode
@@ -1965,22 +1997,20 @@ app.get('/api/users/by-email/:email', async (req, res) => {
     const userRow = rows.find(row => row[2] && row[2].toLowerCase() === userEmailToFind.toLowerCase());
 
     if (userRow) {
-      // ✅ MODIFIED: The user object now includes the parsed permissions array
       const user = {
         id: userRow[0],
         name: userRow[1],
         email: userRow[2],
         role: userRow[3],
-        permissions: parsePermissions(userRow[10]) // Parse permissions from column K
+        permissions: parsePermissions(userRow[10]), // Parse permissions from column K
       };
-      
+
       console.log(`✅ Authentication successful for: ${userEmailToFind}`);
       res.status(200).json(user);
     } else {
       console.log(`❌ Authentication failed. User not found: ${userEmailToFind}`);
-      res.status(404).json({ error: 'User not found in application registry.' });
+      res.status(404).json({ error: 'User not found in application registry. Please contact admin.' });
     }
-
   } catch (err) {
     console.error("Error looking up user by email from Google Sheet:", err);
     res.status(500).json({ error: "Failed to verify user." });
@@ -2039,6 +2069,73 @@ app.get('/api/audio', async (req, res) => {
   }
 });
 
+app.get('/api/audio/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['AID', 'AudioList', 'Distribution'], // Searchable fields
+      ['AID', 'AudioList', 'Distribution', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM Audio ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="audio_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/audio/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/audio/:AID', async (req, res) => {
+  const { AID } = req.params; // Extract the Audio ID from the URL
+  const { AudioList } = req.body; // Extract the AudioList from the request body
+
+  if (!AID) {
+    return res.status(400).json({ error: "Audio ID (AID) is required." });
+  }
+
+  if (!AudioList) {
+    return res.status(400).json({ error: "AudioList is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE Audio
+      SET AudioList = ?, LastModifiedTimestamp = NOW()
+      WHERE AID = ?
+    `;
+
+    const [result] = await db.query(query, [AudioList, AID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Audio with ID ${AID} not found.` });
+    }
+
+    res.status(200).json({ message: "AudioList updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/audio/:AID:", err);
+    res.status(500).json({ error: "Failed to update AudioList." });
+  }
+});
+
 
 app.get('/api/bhajan-type', async (req, res) => {
   try {
@@ -2090,6 +2187,72 @@ app.get('/api/bhajan-type', async (req, res) => {
   }
 });
 
+app.get('/api/bhajan-type/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['BTID', 'BhajanName'], // Searchable fields
+      ['BTID', 'BhajanName', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM BhajanTypes ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="bhajan_type_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/bhajan-type/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/bhajantype/:BTID', async (req, res) => {
+  const { BTID } = req.params; // Extract the Bhajan Type ID from the URL
+  const { BhajanName } = req.body; // Extract the BhajanName from the request body
+
+  if (!BTID) {
+    return res.status(400).json({ error: "Bhajan Type ID (BTID) is required." });
+  }
+
+  if (!BhajanName) {
+    return res.status(400).json({ error: "BhajanName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE BhajanTypes
+      SET BhajanName = ?, LastModifiedTimestamp = NOW()
+      WHERE BTID = ?
+    `;
+
+    const [result] = await db.query(query, [BhajanName, BTID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Bhajan Type with ID ${BTID} not found.` });
+    }
+
+    res.status(200).json({ message: "BhajanName updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/bhajantype/:BTID:", err);
+    res.status(500).json({ error: "Failed to update BhajanName." });
+  }
+});
 
 app.get('/api/digital-master-category', async (req, res) => {
   try {
@@ -2141,6 +2304,72 @@ app.get('/api/digital-master-category', async (req, res) => {
   }
 });
 
+app.get('/api/digital-master-category/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['DMCID', 'DMCategory_name'], // Searchable fields
+      ['DMCID', 'DMCategory_name', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM DigitalMasterCategory ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="digital_master_category_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/digital-master-category/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/digitalmastercategory/:DMCID', async (req, res) => {
+  const { DMCID } = req.params; // Extract the Digital Master Category ID from the URL
+  const { DMCategory_name } = req.body; // Extract the DMCategory_name from the request body
+
+  if (!DMCID) {
+    return res.status(400).json({ error: "Digital Master Category ID (DMCID) is required." });
+  }
+
+  if (!DMCategory_name) {
+    return res.status(400).json({ error: "DMCategory_name is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE DigitalMasterCategory
+      SET DMCategory_name = ?, LastModifiedTimestamp = NOW()
+      WHERE DMCID = ?
+    `;
+
+    const [result] = await db.query(query, [DMCategory_name, DMCID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Digital Master Category with ID ${DMCID} not found.` });
+    }
+
+    res.status(200).json({ message: "DMCategory_name updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/digitalmastercategory/:DMCID:", err);
+    res.status(500).json({ error: "Failed to update DMCategory_name." });
+  }
+});
 
 app.get('/api/distribution-label', async (req, res) => {
   try {
@@ -2189,6 +2418,73 @@ app.get('/api/distribution-label', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/distribution-label:", err);
     res.status(500).json({ error: 'Failed to fetch Distribution Label data' });
+  }
+});
+
+app.get('/api/distribution-label/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['LabelID', 'LabelName'], // Searchable fields
+      ['LabelID', 'LabelName', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM DistributionLabel ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="distribution_label_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/distribution-label/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/distributionlabel/:LabelID', async (req, res) => {
+  const { LabelID } = req.params; // Extract the Label ID from the URL
+  const { LabelName } = req.body; // Extract the LabelName from the request body
+
+  if (!LabelID) {
+    return res.status(400).json({ error: "Label ID (LabelID) is required." });
+  }
+
+  if (!LabelName) {
+    return res.status(400).json({ error: "LabelName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE DistributionLabel
+      SET LabelName = ?, LastModifiedTimestamp = NOW()
+      WHERE LabelID = ?
+    `;
+
+    const [result] = await db.query(query, [LabelName, LabelID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Distribution Label with ID ${LabelID} not found.` });
+    }
+
+    res.status(200).json({ message: "LabelName updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/distributionlabel/:LabelID:", err);
+    res.status(500).json({ error: "Failed to update LabelName." });
   }
 });
 
@@ -2242,6 +2538,72 @@ app.get('/api/editing-type', async (req, res) => {
   }
 });
 
+app.get('/api/editing-type/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EdID', 'EdType', 'AudioVideo'], // Searchable fields
+      ['EdID', 'EdType', 'AudioVideo'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM EditingType ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="editing_type_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/editing-type/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/editingtype/:EdID', async (req, res) => {
+  const { EdID } = req.params; // Extract the Editing Type ID from the URL
+  const { EdType } = req.body; // Extract the EdType from the request body
+
+  if (!EdID) {
+    return res.status(400).json({ error: "Editing Type ID (EdID) is required." });
+  }
+
+  if (!EdType) {
+    return res.status(400).json({ error: "EdType is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE EditingType
+      SET EdType = ?, LastModifiedTimestamp = NOW()
+      WHERE EdID = ?
+    `;
+
+    const [result] = await db.query(query, [EdType, EdID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Editing Type with ID ${EdID} not found.` });
+    }
+
+    res.status(200).json({ message: "EdType updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/editingtype/:EdID:", err);
+    res.status(500).json({ error: "Failed to update EdType." });
+  }
+});
 
 app.get('/api/event-category', async (req, res) => {
   try {
@@ -2290,6 +2652,74 @@ app.get('/api/event-category', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/event-category:", err);
     res.status(500).json({ error: 'Failed to fetch Event Category data' });
+  }
+});
+
+
+app.get('/api/event-category/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EventCategoryID', 'EventCategory'], // Searchable fields
+      ['EventCategoryID', 'EventCategory', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM EventCategory ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="event_category_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/event-category/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/eventcategory/:EventCategoryID', async (req, res) => {
+  const { EventCategoryID } = req.params; // Extract the Event Category ID from the URL
+  const { EventCategory } = req.body; // Extract the EventCategory from the request body
+
+  if (!EventCategoryID) {
+    return res.status(400).json({ error: "Event Category ID (EventCategoryID) is required." });
+  }
+
+  if (!EventCategory) {
+    return res.status(400).json({ error: "EventCategory is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE EventCategory
+      SET EventCategory = ?, LastModifiedTimestamp = NOW()
+      WHERE EventCategoryID = ?
+    `;
+
+    const [result] = await db.query(query, [EventCategory, EventCategoryID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Event Category with ID ${EventCategoryID} not found.` });
+    }
+
+    res.status(200).json({ message: "EventCategory updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/eventcategory/:EventCategoryID:", err);
+    res.status(500).json({ error: "Failed to update EventCategory." });
   }
 });
 
@@ -2343,6 +2773,72 @@ app.get('/api/footage-type', async (req, res) => {
   }
 });
 
+app.get('/api/footage-type/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['FootageID', 'FootageTypeList'], // Searchable fields
+      ['FootageID', 'FootageTypeList', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM FootageTypes ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="footage_type_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/footage-type/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/footagetype/:FootageID', async (req, res) => {
+  const { FootageID } = req.params; // Extract the Footage ID from the URL
+  const { FootageTypeList } = req.body; // Extract the FootageTypeList from the request body
+
+  if (!FootageID) {
+    return res.status(400).json({ error: "Footage ID (FootageID) is required." });
+  }
+
+  if (!FootageTypeList) {
+    return res.status(400).json({ error: "FootageTypeList is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE FootageTypes
+      SET FootageTypeList = ?, LastModifiedTimestamp = NOW()
+      WHERE FootageID = ?
+    `;
+
+    const [result] = await db.query(query, [FootageTypeList, FootageID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Footage Type with ID ${FootageID} not found.` });
+    }
+
+    res.status(200).json({ message: "FootageTypeList updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/footagetype/:FootageID:", err);
+    res.status(500).json({ error: "Failed to update FootageTypeList." });
+  }
+});
 
 app.get('/api/format-type', async (req, res) => {
   try {
@@ -2394,6 +2890,72 @@ app.get('/api/format-type', async (req, res) => {
   }
 });
 
+app.get('/api/format-type/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['FTID', 'Type'], // Searchable fields
+      ['FTID', 'Type', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM Format ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="format_type_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/format-type/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/formattype/:FTID', async (req, res) => {
+  const { FTID } = req.params; // Extract the Format Type ID from the URL
+  const { Type } = req.body; // Extract the Type from the request body
+
+  if (!FTID) {
+    return res.status(400).json({ error: "Format Type ID (FTID) is required." });
+  }
+
+  if (!Type) {
+    return res.status(400).json({ error: "Type is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE Format
+      SET Type = ?, LastModifiedTimestamp = NOW()
+      WHERE FTID = ?
+    `;
+
+    const [result] = await db.query(query, [Type, FTID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Format Type with ID ${FTID} not found.` });
+    }
+
+    res.status(200).json({ message: "Type updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/formattype/:FTID:", err);
+    res.status(500).json({ error: "Failed to update Type." });
+  }
+});
 
 app.get('/api/granths', async (req, res) => {
   try {
@@ -2444,6 +3006,72 @@ app.get('/api/granths', async (req, res) => {
   }
 });
 
+app.get('/api/granths/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['ID', 'Name'], // Searchable fields
+      ['ID', 'Name'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM NewGranths ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="granths_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/granths/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/granths/:ID', async (req, res) => {
+  const { ID } = req.params; // Extract the Granth ID from the URL
+  const { Name } = req.body; // Extract the Name from the request body
+
+  if (!ID) {
+    return res.status(400).json({ error: "Granth ID (ID) is required." });
+  }
+
+  if (!Name) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewGranths
+      SET Name = ?, LastModifiedTimestamp = NOW()
+      WHERE ID = ?
+    `;
+
+    const [result] = await db.query(query, [Name, ID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Granth with ID ${ID} not found.` });
+    }
+
+    res.status(200).json({ message: "Name updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/granths/:ID:", err);
+    res.status(500).json({ error: "Failed to update Name." });
+  }
+});
 
 app.get('/api/language', async (req, res) => {
   try {
@@ -2495,6 +3123,72 @@ app.get('/api/language', async (req, res) => {
   }
 });
 
+app.get('/api/language/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['STID', 'TitleLanguage'], // Searchable fields
+      ['STID', 'TitleLanguage', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM SubTitlesLanguages ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="language_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/language/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/language/:STID', async (req, res) => {
+  const { STID } = req.params; // Extract the Language ID from the URL
+  const { TitleLanguage } = req.body; // Extract the TitleLanguage from the request body
+
+  if (!STID) {
+    return res.status(400).json({ error: "Language ID (STID) is required." });
+  }
+
+  if (!TitleLanguage) {
+    return res.status(400).json({ error: "TitleLanguage is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE SubTitlesLanguages
+      SET TitleLanguage = ?, LastModifiedTimestamp = NOW()
+      WHERE STID = ?
+    `;
+
+    const [result] = await db.query(query, [TitleLanguage, STID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Language with ID ${STID} not found.` });
+    }
+
+    res.status(200).json({ message: "TitleLanguage updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/language/:STID:", err);
+    res.status(500).json({ error: "Failed to update TitleLanguage." });
+  }
+});
 
 app.get('/api/new-event-category', async (req, res) => {
   try {
@@ -2547,6 +3241,72 @@ app.get('/api/new-event-category', async (req, res) => {
   }
 });
 
+app.get('/api/new-event-category/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['SrNo', 'NewEventCategoryName'], // Searchable fields
+      ['SrNo', 'NewEventCategoryName', 'LastModifiedTimestamp', 'MARK_DISCARD'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM NewEventCategory ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="new_event_category_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-event-category/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/neweventcategory/:CategoryID', async (req, res) => {
+  const { CategoryID } = req.params; // Extract the Category ID from the URL
+  const { NewEventCategoryName } = req.body; // Extract the NewEventCategoryName from the request body
+
+  if (!CategoryID) {
+    return res.status(400).json({ error: "Category ID (CategoryID) is required." });
+  }
+
+  if (!NewEventCategoryName) {
+    return res.status(400).json({ error: "NewEventCategoryName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewEventCategory
+      SET NewEventCategoryName = ?, LastModifiedTimestamp = NOW()
+      WHERE SrNo = ?
+    `;
+
+    const [result] = await db.query(query, [NewEventCategoryName, CategoryID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Event Category with ID ${CategoryID} not found.` });
+    }
+
+    res.status(200).json({ message: "NewEventCategoryName updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/neweventcategory/:CategoryID:", err);
+    res.status(500).json({ error: "Failed to update NewEventCategoryName." });
+  }
+});
 
 app.get('/api/new-cities', async (req, res) => {
   try {
@@ -2598,6 +3358,72 @@ app.get('/api/new-cities', async (req, res) => {
   }
 });
 
+app.get('/api/new-cities/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['CityID', 'City'], // Searchable fields
+      ['CityID', 'City', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM NewCities ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="new_cities_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-cities/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/newcities/:CityID', async (req, res) => {
+  const { CityID } = req.params; // Extract the City ID from the URL
+  const { City } = req.body; // Extract the City from the request body
+
+  if (!CityID) {
+    return res.status(400).json({ error: "City ID (CityID) is required." });
+  }
+
+  if (!City) {
+    return res.status(400).json({ error: "City is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewCities
+      SET City = ?, LastModifiedTimestamp = NOW()
+      WHERE CityID = ?
+    `;
+
+    const [result] = await db.query(query, [City, CityID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `City with ID ${CityID} not found.` });
+    }
+
+    res.status(200).json({ message: "City updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newcities/:CityID:", err);
+    res.status(500).json({ error: "Failed to update City." });
+  }
+});
 
 app.get('/api/new-countries', async (req, res) => {
   try {
@@ -2646,6 +3472,73 @@ app.get('/api/new-countries', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/new-countries:", err);
     res.status(500).json({ error: 'Failed to fetch New Countries data' });
+  }
+});
+
+app.get('/api/new-countries/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['CountryID', 'Country'], // Searchable fields
+      ['CountryID', 'Country', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM NewCountries ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="new_countries_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-countries/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/newcountries/:CountryID', async (req, res) => {
+  const { CountryID } = req.params; // Extract the Country ID from the URL
+  const { Country } = req.body; // Extract the Country from the request body
+
+  if (!CountryID) {
+    return res.status(400).json({ error: "Country ID (CountryID) is required." });
+  }
+
+  if (!Country) {
+    return res.status(400).json({ error: "Country is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewCountries
+      SET Country = ?, LastModifiedTimestamp = NOW()
+      WHERE CountryID = ?
+    `;
+
+    const [result] = await db.query(query, [Country, CountryID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Country with ID ${CountryID} not found.` });
+    }
+
+    res.status(200).json({ message: "Country updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newcountries/:CountryID:", err);
+    res.status(500).json({ error: "Failed to update Country." });
   }
 });
 
@@ -2699,6 +3592,72 @@ app.get('/api/new-states', async (req, res) => {
   }
 });
 
+app.get('/api/new-states/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['StateID', 'State'], // Searchable fields
+      ['StateID', 'State', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM NewStates ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="new_states_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-states/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/newstates/:StateID', async (req, res) => {
+  const { StateID } = req.params; // Extract the State ID from the URL
+  const { State } = req.body; // Extract the State from the request body
+
+  if (!StateID) {
+    return res.status(400).json({ error: "State ID (StateID) is required." });
+  }
+
+  if (!State) {
+    return res.status(400).json({ error: "State is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewStates
+      SET State = ?, LastModifiedTimestamp = NOW()
+      WHERE StateID = ?
+    `;
+
+    const [result] = await db.query(query, [State, StateID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `State with ID ${StateID} not found.` });
+    }
+
+    res.status(200).json({ message: "State updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newstates/:StateID:", err);
+    res.status(500).json({ error: "Failed to update State." });
+  }
+});
 
 app.get('/api/occasions', async (req, res) => {
   try {
@@ -2750,8 +3709,72 @@ app.get('/api/occasions', async (req, res) => {
   }
 });
 
+app.get('/api/occasions/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['OccasionID', 'Occasion'], // Searchable fields
+      ['OccasionID', 'Occasion', 'LastModifiedTimestamp'] // Filterable columns
+    );
 
+    const dataQuery = `SELECT * FROM Occasions ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
 
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="occasions_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/occasions/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/occasions/:OccasionID', async (req, res) => {
+  const { OccasionID } = req.params; // Extract the Occasion ID from the URL
+  const { Occasion } = req.body; // Extract the Occasion from the request body
+
+  if (!OccasionID) {
+    return res.status(400).json({ error: "Occasion ID (OccasionID) is required." });
+  }
+
+  if (!Occasion) {
+    return res.status(400).json({ error: "Occasion is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE Occasions
+      SET Occasion = ?, LastModifiedTimestamp = NOW()
+      WHERE OccasionID = ?
+    `;
+
+    const [result] = await db.query(query, [Occasion, OccasionID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Occasion with ID ${OccasionID} not found.` });
+    }
+
+    res.status(200).json({ message: "Occasion updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/occasions/:OccasionID:", err);
+    res.status(500).json({ error: "Failed to update Occasion." });
+  }
+});
 
 
 app.get('/api/topic-number-source', async (req, res) => {
@@ -2803,7 +3826,37 @@ app.get('/api/topic-number-source', async (req, res) => {
   }
 });
 
+app.put('/api/topicnumbersource/:TNID', async (req, res) => {
+  const { TNID } = req.params; // Extract the Topic Number ID from the URL
+  const { TNName } = req.body; // Extract the TNName from the request body
 
+  if (!TNID) {
+    return res.status(400).json({ error: "Topic Number ID (TNID) is required." });
+  }
+
+  if (!TNName) {
+    return res.status(400).json({ error: "TNName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE TopicNumberSource
+      SET TNName = ?, LastModifiedTimestamp = NOW()
+      WHERE TNID = ?
+    `;
+
+    const [result] = await db.query(query, [TNName, TNID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Topic Number with ID ${TNID} not found.` });
+    }
+
+    res.status(200).json({ message: "TNName updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/topicnumbersource/:TNID:", err);
+    res.status(500).json({ error: "Failed to update TNName." });
+  }
+});
 // ✅ ADDED: NEW ENDPOINT TO UPDATE LAST ACTIVE STATUS
 app.put('/api/users/:id/last-active', async (req, res) => {
     const { id } = req.params;
@@ -2849,6 +3902,42 @@ app.put('/api/users/:id/last-active', async (req, res) => {
         console.error("Error updating last active status:", err);
         res.status(500).json({ error: "Failed to update last active status." });
     }
+});
+
+
+app.get('/api/topic-number-source/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TNID', 'TNName'], // Searchable fields
+      ['TNID', 'TNName'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM TopicNumberSource ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="topic_number_source_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-number-source/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
 });
 
 
