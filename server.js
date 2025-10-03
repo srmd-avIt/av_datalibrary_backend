@@ -960,6 +960,73 @@ app.get('/api/digitalrecordings/:recordingCode', async (req, res) => {
   }
 });
 
+// Place this BEFORE any app.get('/api/newmedialog/:id') routes
+app.get('/api/newmedialog/pratishtha', async (req, res) => {
+  try {
+    // Calculate the date 15 days ago
+    const fifteenDaysAgo = new Date();
+    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+    const formattedDate = fifteenDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
+
+    const query = `
+      SELECT MLUniqueID, \`Segment Category\`
+      FROM NewMediaLog
+      WHERE \`Segment Category\` = 'Pratishtha'
+        AND LastModifiedTimestamp >= ?
+      ORDER BY LastModifiedTimestamp DESC
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS count
+      FROM NewMediaLog
+      WHERE \`Segment Category\` = 'Pratishtha'
+        AND LastModifiedTimestamp >= ?
+    `;
+
+    const [results] = await db.query(query, [formattedDate]);
+    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
+
+    res.status(200).json({ count, data: results });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newmedialog/pratishtha:", err);
+    res.status(500).json({ error: 'Failed to fetch Pratishtha data.' });
+  }
+});
+
+
+
+app.get('/api/newmedialog/padhramani', async (req, res) => {
+  try {
+    // Calculate the date 15 days ago
+    const fifteenDaysAgo = new Date();
+    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+    const formattedDate = fifteenDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
+
+    const query = `
+      SELECT MLUniqueID, \`Segment Category\`
+      FROM NewMediaLog
+      WHERE \`Segment Category\` = 'Padhramani'
+        AND LastModifiedTimestamp >= ?
+      ORDER BY LastModifiedTimestamp DESC
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS count
+      FROM NewMediaLog
+      WHERE \`Segment Category\` = 'Padhramani'
+        AND LastModifiedTimestamp >= ?
+    `;
+
+    const [results] = await db.query(query, [formattedDate]);
+    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
+
+    res.status(200).json({ count, data: results });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newmedialog/padhramani:", err);
+    res.status(500).json({ error: 'Failed to fetch Padhramani data.' });
+  }
+});
+
 
 // --- Get a single New Media Log by MLUniqueID ---
 app.get('/api/newmedialog/:mlid', async (req, res) => {
@@ -3939,6 +4006,12 @@ app.get('/api/topic-number-source/export', async (req, res) => {
     res.status(500).json({ error: 'CSV export failed' });
   }
 });
+
+
+
+
+
+
 
 
 
