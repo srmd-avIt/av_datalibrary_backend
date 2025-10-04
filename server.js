@@ -239,7 +239,7 @@ app.get('/api/events', async (req, res) => {
 
     const filterableColumns = [
       'EventID','EventCode','Yr','SubmittedDate','FromDate','ToDate',
-      'EventName','fkEventCategory','EventRemarks','EventMonth','CommonId',
+      'EventName','fkEventCategory','NewEventCategory','EventRemarks','EventMonth','CommonId',
       'IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount',
       'PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration',
       'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'
@@ -963,24 +963,24 @@ app.get('/api/digitalrecordings/:recordingCode', async (req, res) => {
 // Place this BEFORE any app.get('/api/newmedialog/:id') routes
 app.get('/api/newmedialog/pratishtha', async (req, res) => {
   try {
-    // Calculate the date 15 days ago
-    const fifteenDaysAgo = new Date();
-    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
-    const formattedDate = fifteenDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
+    // Calculate the date 90 days ago
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
 
     const query = `
       SELECT MLUniqueID, \`Segment Category\`
       FROM NewMediaLog
       WHERE \`Segment Category\` = 'Pratishtha'
-        AND LastModifiedTimestamp >= ?
-      ORDER BY LastModifiedTimestamp DESC
+        AND ContentTo >= ?
+      ORDER BY ContentTo DESC
     `;
 
     const countQuery = `
       SELECT COUNT(*) AS count
       FROM NewMediaLog
       WHERE \`Segment Category\` = 'Pratishtha'
-        AND LastModifiedTimestamp >= ?
+        AND ContentTo >= ?
     `;
 
     const [results] = await db.query(query, [formattedDate]);
@@ -997,24 +997,24 @@ app.get('/api/newmedialog/pratishtha', async (req, res) => {
 
 app.get('/api/newmedialog/padhramani', async (req, res) => {
   try {
-    // Calculate the date 15 days ago
-    const fifteenDaysAgo = new Date();
-    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
-    const formattedDate = fifteenDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
+    // Calculate the date 90 days ago
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
 
     const query = `
       SELECT MLUniqueID, \`Segment Category\`
       FROM NewMediaLog
       WHERE \`Segment Category\` = 'Padhramani'
-        AND LastModifiedTimestamp >= ?
-      ORDER BY LastModifiedTimestamp DESC
+        AND ContentTo >= ?
+      ORDER BY ContentTo DESC
     `;
 
     const countQuery = `
       SELECT COUNT(*) AS count
       FROM NewMediaLog
       WHERE \`Segment Category\` = 'Padhramani'
-        AND LastModifiedTimestamp >= ?
+        AND ContentTo >= ?
     `;
 
     const [results] = await db.query(query, [formattedDate]);
@@ -2084,6 +2084,24 @@ app.get('/api/users/by-email/:email', async (req, res) => {
   }
 });
 
+
+// --- NEW ENDPOINT FOR 'AudioList' DROPDOWN ---
+app.get('/api/audio/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        AudioList 
+      FROM Audio 
+      WHERE AudioList IS NOT NULL AND AudioList <> ''
+      ORDER BY AudioList ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/audio/options:", err);
+    res.status(500).json({ error: 'Failed to fetch audio list options.' });
+  }
+});
 // --- Endpoint to fetch data from the "Audio" table ---
 app.get('/api/audio', async (req, res) => {
   try {
@@ -2204,6 +2222,24 @@ app.put('/api/audio/:AID', async (req, res) => {
 });
 
 
+// --- NEW ENDPOINT FOR 'BhajanName' DROPDOWN ---
+app.get('/api/bhajan-type/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        BhajanName 
+      FROM BhajanTypes 
+      WHERE BhajanName IS NOT NULL AND BhajanName <> ''
+      ORDER BY BhajanName ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/bhajan-type/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Bhajan Name options.' });
+  }
+});
+
 app.get('/api/bhajan-type', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -2318,6 +2354,23 @@ app.put('/api/bhajantype/:BTID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/bhajantype/:BTID:", err);
     res.status(500).json({ error: "Failed to update BhajanName." });
+  }
+});
+// --- NEW ENDPOINT FOR 'fkDigitalMasterCategory' DROPDOWN ---
+app.get('/api/digital-master-category/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        DMCategory_name 
+      FROM DigitalMasterCategory 
+      WHERE DMCategory_name IS NOT NULL AND DMCategory_name <> ''
+      ORDER BY DMCategory_name ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/digital-master-category/options:", err);
+    res.status(500).json({ error: 'Failed to fetch digital master category options.' });
   }
 });
 
@@ -2438,6 +2491,24 @@ app.put('/api/digitalmastercategory/:DMCID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'fkDistributionLabel' DROPDOWN ---
+app.get('/api/distribution-label/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        LabelName 
+      FROM DistributionLabel 
+      WHERE LabelName IS NOT NULL AND LabelName <> ''
+      ORDER BY LabelName ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/distribution-label/options:", err);
+    res.status(500).json({ error: 'Failed to fetch distribution label options.' });
+  }
+});
+
 app.get('/api/distribution-label', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -2555,6 +2626,25 @@ app.put('/api/distributionlabel/:LabelID', async (req, res) => {
   }
 });
 
+
+// --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
+app.get('/api/editing-type/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        EdType 
+      FROM EditingType 
+      WHERE EdType IS NOT NULL AND EdType <> ''
+      ORDER BY EdType ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/editing-type/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Editing Type options.' });
+  }
+});
+
 app.get('/api/editing-type', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -2669,6 +2759,24 @@ app.put('/api/editingtype/:EdID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/editingtype/:EdID:", err);
     res.status(500).json({ error: "Failed to update EdType." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
+app.get('/api/event-category/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        EventCategory 
+      FROM EventCategory 
+      WHERE EventCategory IS NOT NULL AND EventCategory <> ''
+      ORDER BY EventCategory ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/event-category/options:", err);
+    res.status(500).json({ error: 'Failed to fetch event category options.' });
   }
 });
 
@@ -2790,6 +2898,24 @@ app.put('/api/eventcategory/:EventCategoryID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'FootageType' DROPDOWN ---
+app.get('/api/footage-type/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        FootageTypeList 
+      FROM FootageTypes 
+      WHERE FootageTypeList IS NOT NULL AND FootageTypeList <> ''
+      ORDER BY FootageTypeList ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/footage-type/options:", err);
+    res.status(500).json({ error: 'Failed to fetch footage type options.' });
+  }
+});
+
 app.get('/api/footage-type', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -2872,6 +2998,25 @@ app.get('/api/footage-type/export', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/footage-type/export:", err);
     res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+
+// --- NEW ENDPOINT FOR 'FormateType' DROPDOWN ---
+app.get('/api/format-type/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        Type 
+      FROM Format 
+      WHERE Type IS NOT NULL AND Type <> ''
+      ORDER BY Type ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/format-type/options:", err);
+    res.status(500).json({ error: 'Failed to fetch format type options.' });
   }
 });
 
@@ -3024,6 +3169,24 @@ app.put('/api/formattype/:FTID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'fkGranth' DROPDOWN ---
+app.get('/api/granths/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        Name 
+      FROM NewGranths 
+      WHERE Name IS NOT NULL AND Name <> ''
+      ORDER BY Name ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/granths/options:", err);
+    res.status(500).json({ error: 'Failed to fetch granth options.' });
+  }
+});
+
 app.get('/api/granths', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -3137,6 +3300,24 @@ app.put('/api/granths/:ID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/granths/:ID:", err);
     res.status(500).json({ error: "Failed to update Name." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'Language' DROPDOWN ---
+app.get('/api/language/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        TitleLanguage 
+      FROM SubTitlesLanguages 
+      WHERE TitleLanguage IS NOT NULL AND TitleLanguage <> ''
+      ORDER BY TitleLanguage ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/language/options:", err);
+    res.status(500).json({ error: 'Failed to fetch language options.' });
   }
 });
 
@@ -3254,6 +3435,24 @@ app.put('/api/language/:STID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/language/:STID:", err);
     res.status(500).json({ error: "Failed to update TitleLanguage." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'New Event Category' DROPDOWN ---
+app.get('/api/new-event-category/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        NewEventCategoryName 
+      FROM NewEventCategory 
+      WHERE NewEventCategoryName IS NOT NULL AND NewEventCategoryName <> ''
+      ORDER BY NewEventCategoryName ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/new-event-category/options:", err);
+    res.status(500).json({ error: 'Failed to fetch new event categories for dropdown.' });
   }
 });
 
@@ -3375,6 +3574,24 @@ app.put('/api/neweventcategory/:CategoryID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'fkCity' DROPDOWN ---
+app.get('/api/cities/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        City 
+      FROM NewCities 
+      WHERE City IS NOT NULL AND City <> ''
+      ORDER BY City ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/cities/options:", err);
+    res.status(500).json({ error: 'Failed to fetch city options.' });
+  }
+});
+
 app.get('/api/new-cities', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -3489,6 +3706,25 @@ app.put('/api/newcities/:CityID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/newcities/:CityID:", err);
     res.status(500).json({ error: "Failed to update City." });
+  }
+});
+
+
+// --- NEW ENDPOINT FOR 'fkCountry' DROPDOWN ---
+app.get('/api/countries/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        Country 
+      FROM NewCountries 
+      WHERE Country IS NOT NULL AND Country <> ''
+      ORDER BY Country ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/countries/options:", err);
+    res.status(500).json({ error: 'Failed to fetch country options.' });
   }
 });
 
@@ -3609,6 +3845,25 @@ app.put('/api/newcountries/:CountryID', async (req, res) => {
   }
 });
 
+
+// --- NEW ENDPOINT FOR 'fkState' DROPDOWN ---
+app.get('/api/states/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        State 
+      FROM NewStates 
+      WHERE State IS NOT NULL AND State <> ''
+      ORDER BY State ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/states/options:", err);
+    res.status(500).json({ error: 'Failed to fetch state options.' });
+  }
+});
+
 app.get('/api/new-states', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
@@ -3723,6 +3978,24 @@ app.put('/api/newstates/:StateID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/newstates/:StateID:", err);
     res.status(500).json({ error: "Failed to update State." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'fkOccasion' DROPDOWN ---
+app.get('/api/occasion/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        Occasion 
+      FROM Occasions 
+      WHERE Occasion IS NOT NULL AND Occasion <> ''
+      ORDER BY Occasion ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/occasion/options:", err);
+    res.status(500).json({ error: 'Failed to fetch occasion options.' });
   }
 });
 
@@ -3843,6 +4116,23 @@ app.put('/api/occasions/:OccasionID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'TopicSource' & 'NumberSource' DROPDOWN ---
+app.get('/api/topic-source/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        TNName 
+      FROM TopicNumberSource 
+      WHERE TNName IS NOT NULL AND TNName <> ''
+      ORDER BY TNName ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-source/options:", err);
+    res.status(500).json({ error: 'Failed to fetch topic source options.' });
+  }
+});
 
 app.get('/api/topic-number-source', async (req, res) => {
   try {
