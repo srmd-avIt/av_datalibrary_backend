@@ -388,14 +388,36 @@ app.get('/api/newmedialog', async (req, res) => {
 
 // server.js
 
+// ...existing code...
+// server.js
+
 app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    const whereClause = `
-      WHERE nml.\`Segment Category\` NOT IN (
+    // --- MODIFICATION: Define filterable columns for this endpoint ---
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicgivenBy'
+    ];
+
+    // --- MODIFICATION: Build dynamic where and order by clauses ---
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, filterableColumns, filterableColumns);
+    const orderByString = buildOrderByClause(req.query, filterableColumns) || 'ORDER BY nml.MLUniqueID DESC';
+
+    const staticWhere = `
+      nml.\`Segment Category\` NOT IN (
         'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
         'Satsang', 'Informal Satsang', 'SU - Extracted'
       )
@@ -410,6 +432,9 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
         OR UPPER(TRIM(nml.\`IsInformal\`)) = 'NO'
       )
     `;
+    
+    const finalWhere = dynamicWhere ? `${dynamicWhere} AND (${staticWhere})` : `WHERE ${staticWhere}`;
+    const finalParams = [...dynamicParams];
 
     // --- Count Query ---
     const countQuery = `
@@ -417,9 +442,9 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
+      ${finalWhere}
     `;
-    const [[{ total }]] = await db.query(countQuery);
+    const [[{ total }]] = await db.query(countQuery, finalParams);
     const totalPages = Math.ceil(total / limit);
 
     // --- Data Query ---
@@ -433,11 +458,11 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
-      ORDER BY nml.MLUniqueID DESC
+      ${finalWhere}
+      ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [limit, offset]);
+    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -455,14 +480,38 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
 });
 
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
+// ...existing code...
+
+// --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
+// ...existing code...
+// --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    const whereClause = `
-      WHERE nml.\`Segment Category\` IN (
+    // --- MODIFICATION: Define filterable columns for this endpoint ---
+    const filterableColumns = [
+     'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicgivenBy'
+    ];
+
+    // --- MODIFICATION: Build dynamic where and order by clauses ---
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, filterableColumns, filterableColumns);
+    const orderByString = buildOrderByClause(req.query, filterableColumns) || 'ORDER BY nml.MLUniqueID DESC';
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN (
         'Product/Webseries',
         'SU - Extracted',
         'Satsang Clips'
@@ -474,15 +523,18 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
       )
     `;
 
+    const finalWhere = dynamicWhere ? `${dynamicWhere} AND (${staticWhere})` : `WHERE ${staticWhere}`;
+    const finalParams = [...dynamicParams];
+
     // --- Count Query ---
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
+      ${finalWhere}
     `;
-    const [[{ total }]] = await db.query(countQuery);
+    const [[{ total }]] = await db.query(countQuery, finalParams);
     const totalPages = Math.ceil(total / limit);
 
     // --- Data Query ---
@@ -496,11 +548,11 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
-      ORDER BY nml.MLUniqueID DESC
+      ${finalWhere}
+      ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [limit, offset]);
+    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -519,14 +571,39 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
 
 
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
+// ...existing code...
+
+
+// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
+// ...existing code...
+// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 app.get('/api/newmedialog/satsang-category', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    const whereClause = `
-      WHERE nml.\`Segment Category\` IN (
+    // --- MODIFICATION: Define filterable columns for this endpoint ---
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicgivenBy'
+    ];
+
+    // --- MODIFICATION: Build dynamic where and order by clauses ---
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, filterableColumns, filterableColumns);
+    const orderByString = buildOrderByClause(req.query, filterableColumns) || 'ORDER BY nml.MLUniqueID DESC';
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN (
         'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision',
         'Satsang', 'Informal Satsang', 'SU - Extracted'
       )
@@ -537,15 +614,18 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       )
     `;
 
+    const finalWhere = dynamicWhere ? `${dynamicWhere} AND (${staticWhere})` : `WHERE ${staticWhere}`;
+    const finalParams = [...dynamicParams];
+
     // --- Count Query ---
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
+      ${finalWhere}
     `;
-    const [[{ total }]] = await db.query(countQuery);
+    const [[{ total }]] = await db.query(countQuery, finalParams);
     const totalPages = Math.ceil(total / limit);
 
     // --- Data Query ---
@@ -559,11 +639,11 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      ${whereClause}
-      ORDER BY nml.MLUniqueID DESC
+      ${finalWhere}
+      ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [limit, offset]);
+    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -579,6 +659,11 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+
+
+
 
 
 
@@ -1027,6 +1112,71 @@ app.get('/api/newmedialog/padhramani', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT: Fetch distinct cities from the last 90 days ---
+app.get('/api/newmedialog/city', async (req, res) => {
+  try {
+    // Calculate the date 90 days ago
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME format
+
+    const query = `
+      SELECT DISTINCT fkCity
+      FROM NewMediaLog
+      WHERE fkCity IS NOT NULL AND fkCity <> ''
+        AND ContentTo >= ?
+      ORDER BY fkCity ASC
+    `;
+
+    const countQuery = `
+      SELECT COUNT(DISTINCT fkCity) AS count
+      FROM NewMediaLog
+      WHERE fkCity IS NOT NULL AND fkCity <> ''
+        AND ContentTo >= ?
+    `;
+
+    const [results] = await db.query(query, [formattedDate]);
+    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
+
+    res.status(200).json({ count, data: results });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newmedialog/city:", err);
+    res.status(500).json({ error: 'Failed to fetch City data.' });
+  }
+});
+
+// --- NEW ENDPOINT: Fetch distinct countries from the last 90 days ---
+app.get('/api/newmedialog/country', async (req, res) => {
+  try {
+    // Calculate the date 90 days ago
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME format
+
+    const query = `
+      SELECT DISTINCT fkCountry
+      FROM NewMediaLog
+      WHERE fkCountry IS NOT NULL AND fkCountry <> ''
+        AND ContentTo >= ?
+      ORDER BY fkCountry ASC
+    `;
+
+    const countQuery = `
+      SELECT COUNT(DISTINCT fkCountry) AS count
+      FROM NewMediaLog
+      WHERE fkCountry IS NOT NULL AND fkCountry <> ''
+        AND ContentTo >= ?
+    `;
+
+    const [results] = await db.query(query, [formattedDate]);
+    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
+
+    res.status(200).json({ count, data: results });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newmedialog/country:", err);
+    res.status(500).json({ error: 'Failed to fetch Country data.' });
+  }
+});
 
 // --- Get a single New Media Log by MLUniqueID ---
 app.get('/api/newmedialog/:mlid', async (req, res) => {
