@@ -10,6 +10,23 @@ app.use(cors());
 app.use(express.json());
 
 
+const allowedOrigins = [
+  "https://av-datalibrary-frontend.vercel.app", // Your frontend domain
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // Allow cookies if needed
+  })
+);
+
 const oAuth2Client = new google.auth.OAuth2(
   process.env.CLIENT_ID,
   process.env.CLIENT_SECRET,
