@@ -1,3 +1,5 @@
+require('dotenv').config(); // Load environment variables at the top of the file
+
 // src/server/index.js
 
 const express = require('express');
@@ -9,6 +11,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+
+const allowedOrigins = [
+  "https://av-datalibrary-frontend.vercel.app", // Your frontend domain
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true, // Allow cookies if needed
+  })
+);
 
 const oAuth2Client = new google.auth.OAuth2(
   process.env.CLIENT_ID,
@@ -56,9 +75,6 @@ app.post('/send-invitation', async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
-require('dotenv').config();
-
 
 
 
@@ -485,9 +501,6 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
 
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 // ...existing code...
-
-// --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
-// ...existing code...
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
   try {
@@ -583,10 +596,6 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-
-// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
-// ...existing code...
 
 
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
@@ -742,6 +751,14 @@ app.get('/api/digitalrecording', async (req, res) => {
         'Filesize',
         'Duration',
         'AudioTotalDuration',
+        'RecordingRemarks',
+        'CounterError',
+        'ReasonError',
+        'QcRemarksCheckedOn',
+        'PreservationStatus',
+        'QcSevak',
+        'MasterProductTitle',
+        'Qcstatus',
         'RecordingRemarks',
         'CounterError',
         'ReasonError',
