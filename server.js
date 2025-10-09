@@ -13,7 +13,8 @@ app.use(express.json());
 
 
 const allowedOrigins = [
-  "https://av-datalibrary-frontend.vercel.app", // Your frontend domain
+  "https://av-datalibrary-frontend.vercel.app", 
+  "http://localhost:3000",// Your frontend domain
 ];
 
 app.use(
