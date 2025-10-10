@@ -1,5 +1,3 @@
-require('dotenv').config(); // Load environment variables at the top of the file
-
 // src/server/index.js
 
 const express = require('express');
@@ -11,23 +9,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-
-const allowedOrigins = [
-  "https://av-datalibrary-frontend.vercel.app", // Your frontend domain
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true, // Allow cookies if needed
-  })
-);
 
 const oAuth2Client = new google.auth.OAuth2(
   process.env.CLIENT_ID,
@@ -75,6 +56,9 @@ app.post('/send-invitation', async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+require('dotenv').config();
+
 
 
 
@@ -501,6 +485,9 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
 
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 // ...existing code...
+
+// --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
+// ...existing code...
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
   try {
@@ -596,6 +583,10 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
+// ...existing code...
 
 
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
@@ -751,14 +742,6 @@ app.get('/api/digitalrecording', async (req, res) => {
         'Filesize',
         'Duration',
         'AudioTotalDuration',
-        'RecordingRemarks',
-        'CounterError',
-        'ReasonError',
-        'QcRemarksCheckedOn',
-        'PreservationStatus',
-        'QcSevak',
-        'MasterProductTitle',
-        'Qcstatus',
         'RecordingRemarks',
         'CounterError',
         'ReasonError',
@@ -2967,6 +2950,138 @@ app.put('/api/editingtype/:EdID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
+app.get('/api/editing-status/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        EdType 
+      FROM EditingType 
+      WHERE EdType IS NOT NULL AND EdType <> ''
+      ORDER BY EdType ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/editing-status/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Editing Status options.' });
+  }
+});
+
+app.get('/api/editing-status', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'EdID',
+      'EdType',
+      'AudioVideo',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EdID', 'EdType', 'AudioVideo'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM EditingType ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM EditingType 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/editing-status:", err);
+    res.status(500).json({ error: 'Failed to fetch Editing Status data' });
+  }
+});
+
+app.get('/api/editing-status/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EdID', 'EdType', 'AudioVideo'], // Searchable fields
+      ['EdID', 'EdType', 'AudioVideo'] // Filterable columns
+    );
+    const dataQuery = `SELECT * FROM EditingType ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="editing_status_export.csv"');
+    res.status(200).send(csvContent);
+  }
+  catch (err) {
+    console.error("❌ Database query error on /api/editing-status/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/editingstatus/:EdID', async (req, res) => {
+  const { EdID } = req.params; // Extract the Editing Status ID from the URL
+  const { EdType } = req.body; // Extract the EdType from the request body
+
+  if (!EdID) {
+    return res.status(400).json({ error: "Editing Status ID (EdID) is required." });
+  }
+
+  if (!EdType) {
+    return res.status(400).json({ error: "EdType is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE EditingType
+      SET EdType = ?, LastModifiedTimestamp = NOW()
+      WHERE EdID = ?
+    `;
+
+    const [result] = await db.query(query, [EdType, EdID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Editing Type with ID ${EdID} not found.` });
+    }
+
+    res.status(200).json({ message: "EdType updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/editingtype/:EdID:", err);
+    res.status(500).json({ error: "Failed to update EdType." });
+  }
+});
+
 // --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
 app.get('/api/event-category/options', async (req, res) => {
   try {
@@ -3640,6 +3755,279 @@ app.put('/api/language/:STID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/language/:STID:", err);
     res.status(500).json({ error: "Failed to update TitleLanguage." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'MQName' DROPDOWN ---
+app.get('/api/master-quality/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        MQName 
+      FROM MasterQuality 
+      WHERE MQName IS NOT NULL AND MQName <> ''
+      ORDER BY MQName ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/master-quality/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Master Quality options.' });
+  }
+});
+
+app.get('/api/master-quality', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'MQID',
+      'MQName',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['MQID', 'MQName'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM MasterQuality ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM MasterQuality 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/master-quality:", err);
+    res.status(500).json({ error: 'Failed to fetch Master Quality data' });
+  }
+});
+
+
+app.get('/api/master-quality/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['MQID', 'MQName'], // Searchable fields
+      ['MQID', 'MQName', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM MasterQuality ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="master_quality_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/master-quality/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+
+app.put('/api/master-quality/:MQID', async (req, res) => {
+  const { MQID } = req.params; // Extract the Master Quality ID from the URL
+  const { MQName } = req.body; // Extract the MQName from the request body
+
+  if (!MQID) {
+    return res.status(400).json({ error: "Master Quality ID (MQID) is required." });
+  }
+
+  if (!MQName) {
+    return res.status(400).json({ error: "MQName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE MasterQuality
+      SET MQName = ?, LastModifiedTimestamp = NOW()
+      WHERE MQID = ?
+    `;
+
+    const [result] = await db.query(query, [MQName, MQID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Master Quality with ID ${MQID} not found.` });
+    }
+
+    res.status(200).json({ message: "MQName updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/masterquality/:MQID:", err);
+    res.status(500).json({ error: "Failed to update MQName." });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'Organization' DROPDOWN ---
+app.get('/api/organizations/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        Organization 
+      FROM Organizations 
+      WHERE Organization IS NOT NULL AND Organization <> ''
+      ORDER BY Organization ASC
+    `;
+    const [results] = await db.query(query);
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/organizations/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Organization options.' });
+  }
+});
+
+app.get('/api/organizations', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'OrganizationID',
+      'Organization',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['OrganizationID', 'Organization'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM Organizations ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM Organizations 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/organizations:", err);
+    res.status(500).json({ error: 'Failed to fetch Organizations data' });
+  }
+});
+
+
+app.get('/api/organizations/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['OrganizationID', 'Organization'], // Searchable fields
+      ['OrganizationID', 'Organization', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM Organizations ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="organizations_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/organizations/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/organizations/:OrganizationID', async (req, res) => {
+  const { OrganizationID } = req.params; // Extract the Organization ID from the URL
+  const { Organization } = req.body; // Extract the Organization from the request body
+
+  if (!OrganizationID) {
+    return res.status(400).json({ error: "Organization ID (OrganizationID) is required." });
+  }
+
+  if (!Organization) {
+    return res.status(400).json({ error: "Organization is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE Organizations
+      SET Organization = ?, LastModifiedTimestamp = NOW()
+      WHERE OrganizationID = ?
+    `;
+
+    const [result] = await db.query(query, [Organization, OrganizationID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Organization with ID ${OrganizationID} not found.` });
+    }
+
+    res.status(200).json({ message: "Organization updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/organizations/:OrganizationID:", err);
+    res.status(500).json({ error: "Failed to update Organization." });
   }
 });
 
