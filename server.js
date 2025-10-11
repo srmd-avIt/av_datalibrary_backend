@@ -339,7 +339,7 @@ app.get('/api/newmedialog', async (req, res) => {
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
-      'TopicgivenBy'
+      'TopicGivenBy'
     ];
 
     const { whereString, params } = buildWhereClause(
@@ -354,7 +354,7 @@ app.get('/api/newmedialog', async (req, res) => {
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
-      'TopicgivenBy'], // global search fields
+      'TopicGivenBy'], // global search fields
       filterableColumns
     );
 
@@ -2431,14 +2431,29 @@ app.put('/api/audio/:AID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'BhajanName' DROPDOWN ---
 app.get('/api/bhajan-type/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct BhajanType strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        BhajanName 
-      FROM BhajanTypes 
-      WHERE BhajanName IS NOT NULL AND BhajanName <> ''
-      ORDER BY BhajanName ASC
+      SELECT DISTINCT BhajanType
+      FROM NewMediaLog
+      WHERE BhajanType IS NOT NULL AND TRIM(BhajanType) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allTypes = new Set();
+    rows.forEach(row => {
+      if (row.BhajanType) {
+        row.BhajanType.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTypes.add(t));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueTypes = Array.from(allTypes).sort();
+    const results = uniqueTypes.map(t => ({ BhajanType: t }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/bhajan-type/options:", err);
@@ -2565,14 +2580,29 @@ app.put('/api/bhajantype/:BTID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkDigitalMasterCategory' DROPDOWN ---
 app.get('/api/digital-master-category/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkDigitalMasterCategory strings from the DigitalRecordings table.
     const query = `
-      SELECT DISTINCT 
-        DMCategory_name 
-      FROM DigitalMasterCategory 
-      WHERE DMCategory_name IS NOT NULL AND DMCategory_name <> ''
-      ORDER BY DMCategory_name ASC
+      SELECT DISTINCT fkDigitalMasterCategory
+      FROM DigitalRecordings
+      WHERE fkDigitalMasterCategory IS NOT NULL AND TRIM(fkDigitalMasterCategory) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allCategories = new Set();
+    rows.forEach(row => {
+      if (row.fkDigitalMasterCategory) {
+        row.fkDigitalMasterCategory.split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '')
+          .forEach(c => allCategories.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueCategories = Array.from(allCategories).sort();
+    const results = uniqueCategories.map(c => ({ fkDigitalMasterCategory: c }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/digital-master-category/options:", err);
@@ -2700,14 +2730,29 @@ app.put('/api/digitalmastercategory/:DMCID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkDistributionLabel' DROPDOWN ---
 app.get('/api/distribution-label/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkDistributionLabel strings from the DigitalRecordings table.
     const query = `
-      SELECT DISTINCT 
-        LabelName 
-      FROM DistributionLabel 
-      WHERE LabelName IS NOT NULL AND LabelName <> ''
-      ORDER BY LabelName ASC
+      SELECT DISTINCT fkDistributionLabel
+      FROM DigitalRecordings
+      WHERE fkDistributionLabel IS NOT NULL AND TRIM(fkDistributionLabel) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allLabels = new Set();
+    rows.forEach(row => {
+      if (row.fkDistributionLabel) {
+        row.fkDistributionLabel.split(',')
+          .map(l => l.trim())
+          .filter(l => l !== '')
+          .forEach(l => allLabels.add(l));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueLabels = Array.from(allLabels).sort();
+    const results = uniqueLabels.map(l => ({ fkDistributionLabel: l }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/distribution-label/options:", err);
@@ -2836,14 +2881,29 @@ app.put('/api/distributionlabel/:LabelID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
 app.get('/api/editing-type/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct EditingType strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        EdType 
-      FROM EditingType 
-      WHERE EdType IS NOT NULL AND EdType <> ''
-      ORDER BY EdType ASC
+      SELECT DISTINCT EditingType
+      FROM NewMediaLog
+      WHERE EditingType IS NOT NULL AND TRIM(EditingType) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allTypes = new Set();
+    rows.forEach(row => {
+      if (row.EditingType) {
+        row.EditingType.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTypes.add(t));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueTypes = Array.from(allTypes).sort();
+    const results = uniqueTypes.map(t => ({ EditingType: t }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/editing-type/options:", err);
@@ -2971,14 +3031,29 @@ app.put('/api/editingtype/:EdID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
 app.get('/api/editing-status/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct EditingStatus strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        EdType 
-      FROM EditingType 
-      WHERE EdType IS NOT NULL AND EdType <> ''
-      ORDER BY EdType ASC
+      SELECT DISTINCT EditingStatus
+      FROM NewMediaLog
+      WHERE EditingStatus IS NOT NULL AND TRIM(EditingStatus) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allStatuses = new Set();
+    rows.forEach(row => {
+      if (row.EditingStatus) {
+        row.EditingStatus.split(',')
+          .map(s => s.trim())
+          .filter(s => s !== '')
+          .forEach(s => allStatuses.add(s));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueStatuses = Array.from(allStatuses).sort();
+    const results = uniqueStatuses.map(s => ({ EditingStatus: s }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/editing-status/options:", err);
@@ -3239,14 +3314,29 @@ app.put('/api/eventcategory/:EventCategoryID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'FootageType' DROPDOWN ---
 app.get('/api/footage-type/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct FootageType strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        FootageTypeList 
-      FROM FootageTypes 
-      WHERE FootageTypeList IS NOT NULL AND FootageTypeList <> ''
-      ORDER BY FootageTypeList ASC
+      SELECT DISTINCT FootageType
+      FROM NewMediaLog
+      WHERE FootageType IS NOT NULL AND TRIM(FootageType) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allTypes = new Set();
+    rows.forEach(row => {
+      if (row.FootageType) {
+        row.FootageType.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTypes.add(t));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueTypes = Array.from(allTypes).sort();
+    const results = uniqueTypes.map(t => ({ FootageType: t }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/footage-type/options:", err);
@@ -3343,14 +3433,29 @@ app.get('/api/footage-type/export', async (req, res) => {
 // --- NEW ENDPOINT FOR 'FormateType' DROPDOWN ---
 app.get('/api/format-type/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkMediaName strings from the DigitalRecordings table.
     const query = `
-      SELECT DISTINCT 
-        Type 
-      FROM Format 
-      WHERE Type IS NOT NULL AND Type <> ''
-      ORDER BY Type ASC
+      SELECT DISTINCT fkMediaName
+      FROM DigitalRecordings
+      WHERE fkMediaName IS NOT NULL AND TRIM(fkMediaName) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allTypes = new Set();
+    rows.forEach(row => {
+      if (row.fkMediaName) {
+        row.fkMediaName.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTypes.add(t));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueTypes = Array.from(allTypes).sort();
+    const results = uniqueTypes.map(t => ({ fkMediaName: t }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/format-type/options:", err);
@@ -3510,14 +3615,29 @@ app.put('/api/formattype/:FTID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkGranth' DROPDOWN ---
 app.get('/api/granths/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkGranth strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        Name 
-      FROM NewGranths 
-      WHERE Name IS NOT NULL AND Name <> ''
-      ORDER BY Name ASC
+      SELECT DISTINCT fkGranth
+      FROM NewMediaLog
+      WHERE fkGranth IS NOT NULL AND TRIM(fkGranth) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allGranths = new Set();
+    rows.forEach(row => {
+      if (row.fkGranth) {
+        row.fkGranth.split(',')
+          .map(g => g.trim())
+          .filter(g => g !== '')
+          .forEach(g => allGranths.add(g));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueGranths = Array.from(allGranths).sort();
+    const results = uniqueGranths.map(g => ({ fkGranth: g }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/granths/options:", err);
@@ -3644,14 +3764,29 @@ app.put('/api/granths/:ID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'Language' DROPDOWN ---
 app.get('/api/language/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct Language strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        TitleLanguage 
-      FROM SubTitlesLanguages 
-      WHERE TitleLanguage IS NOT NULL AND TitleLanguage <> ''
-      ORDER BY TitleLanguage ASC
+      SELECT DISTINCT Language
+      FROM NewMediaLog
+      WHERE Language IS NOT NULL AND TRIM(Language) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allLanguages = new Set();
+    rows.forEach(row => {
+      if (row.Language) {
+        row.Language.split(',')
+          .map(l => l.trim())
+          .filter(l => l !== '')
+          .forEach(l => allLanguages.add(l));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueLanguages = Array.from(allLanguages).sort();
+    const results = uniqueLanguages.map(l => ({ Language: l }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/language/options:", err);
@@ -3779,14 +3914,29 @@ app.put('/api/language/:STID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'MQName' DROPDOWN ---
 app.get('/api/master-quality/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct Masterquality strings from the DigitalRecordings table.
     const query = `
-      SELECT DISTINCT 
-        MQName 
-      FROM MasterQuality 
-      WHERE MQName IS NOT NULL AND MQName <> ''
-      ORDER BY MQName ASC
+      SELECT DISTINCT Masterquality
+      FROM DigitalRecordings
+      WHERE Masterquality IS NOT NULL AND TRIM(Masterquality) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allQualities = new Set();
+    rows.forEach(row => {
+      if (row.Masterquality) {
+        row.Masterquality.split(',')
+          .map(q => q.trim())
+          .filter(q => q !== '')
+          .forEach(q => allQualities.add(q));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueQualities = Array.from(allQualities).sort();
+    const results = uniqueQualities.map(q => ({ Masterquality: q }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/master-quality/options:", err);
@@ -3916,14 +4066,29 @@ app.put('/api/master-quality/:MQID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'Organization' DROPDOWN ---
 app.get('/api/organizations/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkOrganization strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        Organization 
-      FROM Organizations 
-      WHERE Organization IS NOT NULL AND Organization <> ''
-      ORDER BY Organization ASC
+      SELECT DISTINCT fkOrganization
+      FROM NewMediaLog
+      WHERE fkOrganization IS NOT NULL AND TRIM(fkOrganization) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allOrganizations = new Set();
+    rows.forEach(row => {
+      if (row.fkOrganization) {
+        row.fkOrganization.split(',')
+          .map(org => org.trim())
+          .filter(org => org !== '')
+          .forEach(org => allOrganizations.add(org));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueOrganizations = Array.from(allOrganizations).sort();
+    const results = uniqueOrganizations.map(org => ({ fkOrganization: org }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/organizations/options:", err);
@@ -4188,14 +4353,29 @@ app.put('/api/neweventcategory/:CategoryID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkCity' DROPDOWN ---
 app.get('/api/cities/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkCity strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        City 
-      FROM NewCities 
-      WHERE City IS NOT NULL AND City <> ''
-      ORDER BY City ASC
+      SELECT DISTINCT fkCity
+      FROM NewMediaLog
+      WHERE fkCity IS NOT NULL AND TRIM(fkCity) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allCities = new Set();
+    rows.forEach(row => {
+      if (row.fkCity) {
+        row.fkCity.split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '')
+          .forEach(c => allCities.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueCities = Array.from(allCities).sort();
+    const results = uniqueCities.map(c => ({ fkCity: c }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/cities/options:", err);
@@ -4324,14 +4504,29 @@ app.put('/api/newcities/:CityID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkCountry' DROPDOWN ---
 app.get('/api/countries/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkCountry strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        Country 
-      FROM NewCountries 
-      WHERE Country IS NOT NULL AND Country <> ''
-      ORDER BY Country ASC
+      SELECT DISTINCT fkCountry
+      FROM NewMediaLog
+      WHERE fkCountry IS NOT NULL AND TRIM(fkCountry) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allCountries = new Set();
+    rows.forEach(row => {
+      if (row.fkCountry) {
+        row.fkCountry.split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '')
+          .forEach(c => allCountries.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueCountries = Array.from(allCountries).sort();
+    const results = uniqueCountries.map(c => ({ fkCountry: c }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/countries/options:", err);
@@ -4460,14 +4655,29 @@ app.put('/api/newcountries/:CountryID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkState' DROPDOWN ---
 app.get('/api/states/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkState strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        State 
-      FROM NewStates 
-      WHERE State IS NOT NULL AND State <> ''
-      ORDER BY State ASC
+      SELECT DISTINCT fkState
+      FROM NewMediaLog
+      WHERE fkState IS NOT NULL AND TRIM(fkState) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allStates = new Set();
+    rows.forEach(row => {
+      if (row.fkState) {
+        row.fkState.split(',')
+          .map(s => s.trim())
+          .filter(s => s !== '')
+          .forEach(s => allStates.add(s));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueStates = Array.from(allStates).sort();
+    const results = uniqueStates.map(s => ({ fkState: s }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/states/options:", err);
@@ -4595,14 +4805,29 @@ app.put('/api/newstates/:StateID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'fkOccasion' DROPDOWN ---
 app.get('/api/occasion/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkOccasion strings from the NewMediaLog table.
     const query = `
-      SELECT DISTINCT 
-        Occasion 
-      FROM Occasions 
-      WHERE Occasion IS NOT NULL AND Occasion <> ''
-      ORDER BY Occasion ASC
+      SELECT DISTINCT fkOccasion
+      FROM NewMediaLog
+      WHERE fkOccasion IS NOT NULL AND TRIM(fkOccasion) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allOccasions = new Set();
+    rows.forEach(row => {
+      if (row.fkOccasion) {
+        row.fkOccasion.split(',')
+          .map(o => o.trim())
+          .filter(o => o !== '')
+          .forEach(o => allOccasions.add(o));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueOccasions = Array.from(allOccasions).sort();
+    const results = uniqueOccasions.map(o => ({ fkOccasion: o }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/occasion/options:", err);
@@ -4910,13 +5135,784 @@ app.get('/api/topic-number-source/export', async (req, res) => {
 
 
 
+// --- NEW ENDPOINT FOR 'TimeList' DROPDOWN ---
+app.get('/api/time-of-day/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct TimeOfDay strings from the NewMediaLog table.
+    const query = `
+      SELECT DISTINCT TimeOfDay
+      FROM NewMediaLog
+      WHERE TimeOfDay IS NOT NULL AND TRIM(TimeOfDay) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allTimes = new Set();
+    rows.forEach(row => {
+      if (row.TimeOfDay) {
+        row.TimeOfDay.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTimes.add(t));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueTimes = Array.from(allTimes).sort();
+    const results = uniqueTimes.map(t => ({ TimeOfDay: t }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/time-of-day/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Time of Day options.' });
+  }
+});
+
+app.get('/api/time-of-day', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'TimeID',
+      'TimeList',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TimeID', 'TimeList'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM TimeOfDays ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM TimeOfDays 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/time-of-day:", err);
+    res.status(500).json({ error: 'Failed to fetch Time of Day data' });
+  }
+});
 
 
+app.get('/api/time-of-day/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TimeID', 'TimeList'], // Searchable fields
+      ['TimeID', 'TimeList']  // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM TimeOfDays ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="time_of_day_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/time-of-day/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
 
 
+app.put('/api/time-of-day/:TimeID', async (req, res) => {
+  const { TimeID } = req.params;
+  const { TimeList } = req.body;
+
+  if (!TimeID) {
+    return res.status(400).json({ error: "Time ID (TimeID) is required." });
+  }
+
+  if (!TimeList) {
+    return res.status(400).json({ error: "TimeList is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE TimeOfDays
+      SET TimeList = ?, LastModifiedTimestamp = NOW()
+      WHERE TimeID = ?
+    `;
+
+    const [result] = await db.query(query, [TimeList, TimeID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Time of Day with ID ${TimeID} not found.` });
+    }
+
+    res.status(200).json({ message: "Time of Day updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/time-of-day/:TimeID:", err);
+    res.status(500).json({ error: "Failed to update Time of Day." });
+  }
+});
 
 
+// --- NEW ENDPOINT FOR 'AuxFileType' DROPDOWN ---
+app.get('/api/aux-file-type/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct AuxFileType strings from the AuxFiles table.
+    const query = `
+      SELECT DISTINCT AuxFileType
+      FROM AuxFiles
+      WHERE AuxFileType IS NOT NULL AND TRIM(AuxFileType) <> ''
+    `;
+    const [rows] = await db.query(query);
 
+    // 2. Process the results in Node.js to get individual unique values.
+    const allTypes = new Set();
+    rows.forEach(row => {
+      if (row.AuxFileType) {
+        row.AuxFileType.split(',')
+          .map(v => v.trim())
+          .filter(v => v !== '')
+          .forEach(v => allTypes.add(v));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueTypes = Array.from(allTypes).sort();
+    const results = uniqueTypes.map(v => ({ AuxFileType: v }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/aux-file-type/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Aux File Type options.' });
+  }
+});
+
+
+app.get('/api/aux-file-type', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'AuxTypeID',
+      'AuxFileType',
+      'LastModifiedTimestamp',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['AuxTypeID', 'AuxFileType'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM AuxFileType ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM AuxFileType 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/aux-file-type:", err);
+    res.status(500).json({ error: 'Failed to fetch Aux File Type data' });
+  }
+});
+
+
+app.get('/api/aux-file-type/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['AuxTypeID', 'AuxFileType'], // Searchable fields
+      ['AuxTypeID', 'AuxFileType', 'LastModifiedTimestamp'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM AuxFileType ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="aux_file_type_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/aux-file-type/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+
+app.put('/api/aux-file-type/:AuxTypeID', async (req, res) => {
+  const { AuxTypeID } = req.params;
+  const { AuxFileType } = req.body;
+
+  if (!AuxTypeID) {
+    return res.status(400).json({ error: "Aux File Type ID (AuxTypeID) is required." });
+  }
+
+  if (!AuxFileType) {
+    return res.status(400).json({ error: "AuxFileType is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE AuxFileType
+      SET AuxFileType = ?, LastModifiedTimestamp = NOW()
+      WHERE AuxTypeID = ?
+    `;
+
+    const [result] = await db.query(query, [AuxFileType, AuxTypeID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Aux File Type with ID ${AuxTypeID} not found.` });
+    }
+
+    res.status(200).json({ message: "AuxFileType updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/aux-file-type/:AuxTypeID:", err);
+    res.status(500).json({ error: "Failed to update AuxFileType." });
+  }
+});
+
+
+// --- NEW ENDPOINT FOR 'Keywords' DROPDOWN ---
+app.get('/api/keywords/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct keyword strings from the database.
+    const query = `
+      SELECT DISTINCT Keywords 
+      FROM NewMediaLog 
+      WHERE Keywords IS NOT NULL AND TRIM(Keywords) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results in Node.js to get individual unique keywords.
+    const allKeywords = new Set();
+
+    rows.forEach(row => {
+      if (row.Keywords) {
+        // Split by comma, trim whitespace from each part, and filter out any empty strings that might result.
+        const keywords = row.Keywords.split(',')
+                                     .map(kw => kw.trim())
+                                     .filter(kw => kw !== '');
+        // Add each individual keyword to the Set to ensure uniqueness.
+        keywords.forEach(kw => allKeywords.add(kw));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueKeywords = Array.from(allKeywords).sort();
+    const results = uniqueKeywords.map(kw => ({ Keywords: kw }));
+
+    res.status(200).json(results);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/keywords/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Keywords options.' });
+  }
+});
+
+
+app.get('/api/dimension/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct dimension strings from the database.
+    const query = `
+      SELECT DISTINCT Dimension
+      FROM DigitalRecordings
+      WHERE Dimension IS NOT NULL AND TRIM(Dimension) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results in Node.js to get individual unique dimensions.
+    const allDimensions = new Set();
+
+    rows.forEach(row => {
+      if (row.Dimension) {
+        // Split by comma, trim whitespace, and filter out empty strings.
+        const dims = row.Dimension.split(',')
+                                  .map(d => d.trim())
+                                  .filter(d => d !== '');
+        dims.forEach(d => allDimensions.add(d));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueDimensions = Array.from(allDimensions).sort();
+    const results = uniqueDimensions.map(d => ({ Dimension: d }));
+
+    res.status(200).json(results);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/dimension/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Dimension options.' });
+  }
+});
+
+app.get('/api/production-bucket/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct production bucket strings from the database.
+    const query = `
+      SELECT DISTINCT ProductionBucket
+      FROM DigitalRecordings
+      WHERE ProductionBucket IS NOT NULL AND TRIM(ProductionBucket) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results in Node.js to get individual unique production buckets.
+    const allBuckets = new Set();
+
+    rows.forEach(row => {
+      if (row.ProductionBucket) {
+        // Split by comma, trim whitespace, and filter out empty strings.
+        const buckets = row.ProductionBucket.split(',')
+                                  .map(b => b.trim())
+                                  .filter(b => b !== '');
+        buckets.forEach(b => allBuckets.add(b));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueBuckets = Array.from(allBuckets).sort();
+    const results = uniqueBuckets.map(b => ({ ProductionBucket: b }));
+
+    res.status(200).json(results);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/production-bucket/options:", err);
+    res.status(500).json({ error: 'Failed to fetch ProductionBucket options.' });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'PreservationStatus' DROPDOWN ---
+app.get('/api/preservation-status/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT PreservationStatus
+      FROM DigitalRecordings
+      WHERE PreservationStatus IS NOT NULL AND TRIM(PreservationStatus) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    const allStatuses = new Set();
+    rows.forEach(row => {
+      if (row.PreservationStatus) {
+        row.PreservationStatus.split(',')
+          .map(s => s.trim())
+          .filter(s => s !== '')
+          .forEach(s => allStatuses.add(s));
+      }
+    });
+
+    const uniqueStatuses = Array.from(allStatuses).sort();
+    const results = uniqueStatuses.map(s => ({ PreservationStatus: s }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/preservation-status/options:", err);
+    res.status(500).json({ error: 'Failed to fetch PreservationStatus options.' });
+  }
+});
+
+// --- NEW ENDPOINT FOR 'Teams' DROPDOWN ---
+app.get('/api/teams/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT Teams
+      FROM DigitalRecordings
+      WHERE Teams IS NOT NULL AND TRIM(Teams) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    const allTeams = new Set();
+    rows.forEach(row => {
+      if (row.Teams) {
+        row.Teams.split(',')
+          .map(t => t.trim())
+          .filter(t => t !== '')
+          .forEach(t => allTeams.add(t));
+      }
+    });
+
+    const uniqueTeams = Array.from(allTeams).sort();
+    const results = uniqueTeams.map(t => ({ Teams: t }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/teams/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Teams options.' });
+  }
+});
+
+
+app.get('/api/topic-given-by/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct TopicGivenBy strings from the database.
+    const query = `
+      SELECT DISTINCT TopicGivenBy
+      FROM NewMediaLog
+      WHERE TopicGivenBy IS NOT NULL AND TRIM(TopicGivenBy) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results in Node.js to get individual unique values.
+    const allValues = new Set();
+
+    rows.forEach(row => {
+      if (row.TopicGivenBy) {
+        row.TopicGivenBy.split(',')
+          .map(v => v.trim())
+          .filter(v => v !== '')
+          .forEach(v => allValues.add(v));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueValues = Array.from(allValues).sort();
+    const results = uniqueValues.map(v => ({ TopicGivenBy: v }));
+
+    res.status(200).json(results);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-given-by/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Topic Given By options.' });
+  }
+});
+
+app.get('/api/topic-given-by', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'TGBID',
+      'TGB_Name',
+      'LastModifiedBy',
+      'LastModifiedTs',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TGBID', 'TGB_Name', 'LastModifiedBy'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM TopicGivenBy ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM TopicGivenBy 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-given-by:", err);
+    res.status(500).json({ error: 'Failed to fetch Topic Given By data' });
+  }
+});
+
+app.get('/api/topic-given-by/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['TGBID', 'TGB_Name', 'LastModifiedBy'], // Searchable fields
+      ['TGBID', 'TGB_Name', 'LastModifiedBy', 'LastModifiedTs'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM TopicGivenBy ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="topic_given_by_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-given-by/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/topic-given-by/:TGBID', async (req, res) => {
+  const { TGBID } = req.params;
+  const { TGB_Name, LastModifiedBy } = req.body;
+
+  if (!TGBID) {
+    return res.status(400).json({ error: "TGBID is required." });
+  }
+  if (!TGB_Name) {
+    return res.status(400).json({ error: "TGB_Name is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE TopicGivenBy
+      SET TGB_Name = ?, LastModifiedBy = ?, LastModifiedTs = NOW()
+      WHERE TGBID = ?
+    `;
+
+    const [result] = await db.query(query, [TGB_Name, LastModifiedBy || '', TGBID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Topic Given By with ID ${TGBID} not found.` });
+    }
+
+    res.status(200).json({ message: "Topic Given By updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/topic-given-by/:TGBID:", err);
+    res.status(500).json({ error: "Failed to update Topic Given By." });
+  }
+});
+
+app.get('/api/segment-category/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct segment category strings from the database.
+    const query = `
+      SELECT DISTINCT \`Segment Category\`
+      FROM NewMediaLog
+      WHERE \`Segment Category\` IS NOT NULL AND TRIM(\`Segment Category\`) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results in Node.js to get individual unique segment categories.
+    const allCategories = new Set();
+
+    rows.forEach(row => {
+      if (row['Segment Category']) {
+        // Split by comma, trim whitespace, and filter out empty strings.
+        const cats = row['Segment Category'].split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '');
+        cats.forEach(c => allCategories.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects, as expected by the frontend.
+    const uniqueCategories = Array.from(allCategories).sort();
+    const results = uniqueCategories.map(c => ({ 'Segment Category': c }));
+
+    res.status(200).json(results);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/segment-category/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Segment Category options.' });
+  }
+});
+
+
+app.get('/api/segment-category', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'SegCatID',
+      'SegCatName',
+      'LastModifiedBy',
+      'LastModifiedTs',
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['SegCatID', 'SegCatName', 'LastModifiedBy'], // Searchable fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // --- Count Query ---
+    const countQuery = `SELECT COUNT(*) as total FROM SegmentCategory ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT * 
+      FROM SegmentCategory 
+      ${whereString} 
+      ${orderByString} 
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/segment-category:", err);
+    res.status(500).json({ error: 'Failed to fetch Segment Category data' });
+  }
+});
+
+app.get('/api/segment-category/export', async (req, res) => {
+  try {
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['SegCatID', 'SegCatName', 'LastModifiedBy'], // Searchable fields
+      ['SegCatID', 'SegCatName', 'LastModifiedBy', 'LastModifiedTs'] // Filterable columns
+    );
+
+    const dataQuery = `SELECT * FROM SegmentCategory ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="segment_category_export.csv"');
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ Database query error on /api/segment-category/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/segment-category/:SegCatID', async (req, res) => {
+  const { SegCatID } = req.params;
+  const { SegCatName, LastModifiedBy } = req.body;
+
+  if (!SegCatID) {
+    return res.status(400).json({ error: "SegCatID is required." });
+  }
+  if (!SegCatName) {
+    return res.status(400).json({ error: "SegCatName is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE SegmentCategory
+      SET SegCatName = ?, LastModifiedBy = ?, LastModifiedTs = NOW()
+      WHERE SegCatID = ?
+    `;
+
+    const [result] = await db.query(query, [SegCatName, LastModifiedBy || '', SegCatID]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Segment Category with ID ${SegCatID} not found.` });
+    }
+
+    res.status(200).json({ message: "Segment Category updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/segment-category/:SegCatID:", err);
+    res.status(500).json({ error: "Failed to update Segment Category." });
+  }
+});
 // Start server
 const PORT = process.env.PORT || 3600;
 app.listen(PORT, () => {
