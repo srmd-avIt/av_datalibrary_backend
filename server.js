@@ -318,6 +318,69 @@ app.get('/api/events/export', async (req, res) => {
 });
 
 
+app.put('/api/events/:EventID', async (req, res) => {
+  const { EventID } = req.params;
+  // Destructure all editable fields from the request body
+  const {
+    EventCode, Yr, SubmittedDate, FromDate, ToDate, EventName, fkEventCategory,
+    NewEventCategory, EventRemarks, EventMonth, CommonID, IsSubEvent1, IsAudioRecorded,
+    PravachanCount, UdgoshCount, PaglaCount, PratishthaCount, SummaryRemarks,
+    'Pra-SU-duration': PraSUDuration, LastModifiedBy, NewEventFrom, NewEventTo
+  } = req.body;
+
+  if (!EventID) {
+    return res.status(400).json({ error: "EventID is required." });
+  }
+
+  // You can add more validation for required fields if needed
+
+  try {
+    const query = `
+      UPDATE Events
+      SET
+        EventCode = ?,
+        Yr = ?,
+        SubmittedDate = ?,
+        FromDate = ?,
+        ToDate = ?,
+        EventName = ?,
+        fkEventCategory = ?,
+        NewEventCategory = ?,
+        EventRemarks = ?,
+        EventMonth = ?,
+        CommonID = ?,
+        IsSubEvent1 = ?,
+        IsAudioRecorded = ?,
+        PravachanCount = ?,
+        UdgoshCount = ?,
+        PaglaCount = ?,
+        PratishthaCount = ?,
+        SummaryRemarks = ?,
+        \`Pra-SU-duration\` = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW(),
+        NewEventFrom = ?,
+        NewEventTo = ?
+      WHERE EventID = ?
+    `;
+
+    const [result] = await db.query(query, [
+      EventCode, Yr, SubmittedDate, FromDate, ToDate, EventName, fkEventCategory,
+      NewEventCategory, EventRemarks, EventMonth, CommonID, IsSubEvent1, IsAudioRecorded,
+      PravachanCount, UdgoshCount, PaglaCount, PratishthaCount, SummaryRemarks,
+      PraSUDuration, LastModifiedBy || '', NewEventFrom, NewEventTo, EventID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Event with ID ${EventID} not found.` });
+    }
+
+    res.status(200).json({ message: "Event updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/events/:EventID:", err);
+    res.status(500).json({ error: "Failed to update Event." });
+  }
+});
 
 
 
@@ -740,6 +803,123 @@ app.get('/api/newmedialog/export', async (req, res) => {
 });
 
 
+app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
+  const { MLUniqueID } = req.params;
+  // Destructure all editable fields from the request body
+  const {
+    FootageSrNo, LogSerialNo, fkDigitalRecordingCode, ContentFrom, ContentTo, TimeOfDay,
+    fkOccasion, EditingStatus, FootageType, VideoDistribution, Detail, SubDetail,
+    CounterFrom, CounterTo, SubDuration, TotalDuration, Language, SpeakerSinger, fkOrganization,
+    Designation, fkCountry, fkState, fkCity, Venue, fkGranth, Number, Topic, SeriesName,
+    SatsangStart, SatsangEnd, IsAudioRecorded, AudioMP3Distribution, AudioWAVDistribution,
+    AudioMP3DRCode, AudioWAVDRCode, FullWAVDRCode, Remarks, IsStartPage, EndPage, IsInformal,
+    IsPPGNotPresent, Guidance, DiskMasterDuration, EventRefRemarksCounters, EventRefMLID,
+    EventRefMLID2, DubbedLanguage, DubbingArtist, HasSubtitle, SubTitlesLanguage, EditingDeptRemarks,
+    EditingType, BhajanType, IsDubbed, NumberSource, TopicSource, Synopsis, LocationWithinAshram,
+    Keywords, Grading, 'Segment Category': SegmentCategory, 'Segment Duration': SegmentDuration,
+    TopicGivenBy, LastModifiedBy
+  } = req.body;
+
+  if (!MLUniqueID) {
+    return res.status(400).json({ error: "MLUniqueID is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewMediaLog
+      SET
+        FootageSrNo = ?,
+        LogSerialNo = ?,
+        fkDigitalRecordingCode = ?,
+        ContentFrom = ?,
+        ContentTo = ?,
+        TimeOfDay = ?,
+        fkOccasion = ?,
+        EditingStatus = ?,
+        FootageType = ?,
+        VideoDistribution = ?,
+        Detail = ?,
+        SubDetail = ?,
+        CounterFrom = ?,
+        CounterTo = ?,
+        SubDuration = ?,
+        TotalDuration = ?,
+        Language = ?,
+        SpeakerSinger = ?,
+        fkOrganization = ?,
+        Designation = ?,
+        fkCountry = ?,
+        fkState = ?,
+        fkCity = ?,
+        Venue = ?,
+        fkGranth = ?,
+        Number = ?,
+        Topic = ?,
+        SeriesName = ?,
+        SatsangStart = ?,
+        SatsangEnd = ?,
+        IsAudioRecorded = ?,
+        AudioMP3Distribution = ?,
+        AudioWAVDistribution = ?,
+        AudioMP3DRCode = ?,
+        AudioWAVDRCode = ?,
+        FullWAVDRCode = ?,
+        Remarks = ?,
+        IsStartPage = ?,
+        EndPage = ?,
+        IsInformal = ?,
+        IsPPGNotPresent = ?,
+        Guidance = ?,
+        DiskMasterDuration = ?,
+        EventRefRemarksCounters = ?,
+        EventRefMLID = ?,
+        EventRefMLID2 = ?,
+        DubbedLanguage = ?,
+        DubbingArtist = ?,
+        HasSubtitle = ?,
+        SubTitlesLanguage = ?,
+        EditingDeptRemarks = ?,
+        EditingType = ?,
+        BhajanType = ?,
+        IsDubbed = ?,
+        NumberSource = ?,
+        TopicSource = ?,
+        Synopsis = ?,
+        LocationWithinAshram = ?,
+        Keywords = ?,
+        Grading = ?,
+        \`Segment Category\` = ?,
+        \`Segment Duration\` = ?,
+        TopicGivenBy = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE MLUniqueID = ?
+    `;
+
+    const [result] = await db.query(query, [
+      FootageSrNo, LogSerialNo, fkDigitalRecordingCode, ContentFrom, ContentTo, TimeOfDay,
+      fkOccasion, EditingStatus, FootageType, VideoDistribution, Detail, SubDetail,
+      CounterFrom, CounterTo, SubDuration, TotalDuration, Language, SpeakerSinger, fkOrganization,
+      Designation, fkCountry, fkState, fkCity, Venue, fkGranth, Number, Topic, SeriesName,
+      SatsangStart, SatsangEnd, IsAudioRecorded, AudioMP3Distribution, AudioWAVDistribution,
+      AudioMP3DRCode, AudioWAVDRCode, FullWAVDRCode, Remarks, IsStartPage, EndPage, IsInformal,
+      IsPPGNotPresent, Guidance, DiskMasterDuration, EventRefRemarksCounters, EventRefMLID,
+      EventRefMLID2, DubbedLanguage, DubbingArtist, HasSubtitle, SubTitlesLanguage, EditingDeptRemarks,
+      EditingType, BhajanType, IsDubbed, NumberSource, TopicSource, Synopsis, LocationWithinAshram,
+      Keywords, Grading, SegmentCategory, SegmentDuration, TopicGivenBy, LastModifiedBy || '', MLUniqueID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Media Log with ID ${MLUniqueID} not found.` });
+    }
+
+    res.status(200).json({ message: "Media Log updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/newmedialog/:MLUniqueID:", err);
+    res.status(500).json({ error: "Failed to update Media Log." });
+  }
+});
+
 // --- UPGRADED DigitalRecording Endpoints ---
 app.get('/api/digitalrecording', async (req, res) => {
   try {
@@ -878,6 +1058,80 @@ app.get('/api/digitalrecording/export', async (req, res) => {
     }
 });
 
+
+app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
+  const { RecordingCode } = req.params;
+  const {
+    fkEventCode, RecordingName, NoOfFiles, fkDigitalMasterCategory, fkMediaName,
+    BitRate, AudioBitrate, Filesize, Duration, AudioTotalDuration, RecordingRemarks,
+    CounterError, ReasonError, QcRemarksCheckedOn, PreservationStatus, QCSevak,
+    MasterProductTitle, QcStatus, fkDistributionLabel, SubmittedDate, PresStatGuidDt,
+    InfoOnCassette, Masterquality, IsInformal, FilesizeInBytes, AssociatedDR, Dimension,
+    ProductionBucket, DistributionDriveLink, Teams, LastModifiedBy
+  } = req.body;
+
+  if (!RecordingCode) {
+    return res.status(400).json({ error: "RecordingCode is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE DigitalRecordings
+      SET
+        fkEventCode = ?,
+        RecordingName = ?,
+        NoOfFiles = ?,
+        fkDigitalMasterCategory = ?,
+        fkMediaName = ?,
+        BitRate = ?,
+        AudioBitrate = ?,
+        Filesize = ?,
+        Duration = ?,
+        AudioTotalDuration = ?,
+        RecordingRemarks = ?,
+        CounterError = ?,
+        ReasonError = ?,
+        QcRemarksCheckedOn = ?,
+        PreservationStatus = ?,
+        QCSevak = ?,
+        MasterProductTitle = ?,
+        QcStatus = ?,
+        fkDistributionLabel = ?,
+        SubmittedDate = ?,
+        PresStatGuidDt = ?,
+        InfoOnCassette = ?,
+        Masterquality = ?,
+        IsInformal = ?,
+        FilesizeInBytes = ?,
+        AssociatedDR = ?,
+        Dimension = ?,
+        ProductionBucket = ?,
+        DistributionDriveLink = ?,
+        Teams = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE RecordingCode = ?
+    `;
+
+    const [result] = await db.query(query, [
+      fkEventCode, RecordingName, NoOfFiles, fkDigitalMasterCategory, fkMediaName,
+      BitRate, AudioBitrate, Filesize, Duration, AudioTotalDuration, RecordingRemarks,
+      CounterError, ReasonError, QcRemarksCheckedOn, PreservationStatus, QCSevak,
+      MasterProductTitle, QcStatus, fkDistributionLabel, SubmittedDate, PresStatGuidDt,
+      InfoOnCassette, Masterquality, IsInformal, FilesizeInBytes, AssociatedDR, Dimension,
+      ProductionBucket, DistributionDriveLink, Teams, LastModifiedBy || '', RecordingCode
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Digital Recording with code ${RecordingCode} not found.` });
+    }
+
+    res.status(200).json({ message: "Digital Recording updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/digitalrecording/:RecordingCode:", err);
+    res.status(500).json({ error: "Failed to update Digital Recording." });
+  }
+});
 // --- NEW ENDPOINTS FOR AUXFILES TABLE ---
 
 // Endpoint to get all records from the AuxFiles table
@@ -1046,6 +1300,60 @@ app.put('/api/aux/:new_auxid', async (req, res) => {
   }
 });
 
+app.put('/api/auxfiles/:new_auxid', async (req, res) => {
+  const { new_auxid } = req.params;
+  const {
+    AuxCode, AuxFileType, AuxLanguage, fkMLID, AuxTopic, NotesRemarks, GoogleDriveLink,
+    NoOfFiles, FilesizeBytes, ProjFileCode, ProjFileSize, ProjFileName, SRTLink,
+    CreatedOn, CreatedBy, ModifiedOn, ModifiedBy, LastModifiedBy
+  } = req.body;
+
+  if (!new_auxid) {
+    return res.status(400).json({ error: "new_auxid is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE AuxFiles
+      SET
+        AuxCode = ?,
+        AuxFileType = ?,
+        AuxLanguage = ?,
+        fkMLID = ?,
+        AuxTopic = ?,
+        NotesRemarks = ?,
+        GoogleDriveLink = ?,
+        NoOfFiles = ?,
+        FilesizeBytes = ?,
+        ProjFileCode = ?,
+        ProjFileSize = ?,
+        ProjFileName = ?,
+        SRTLink = ?,
+        CreatedOn = ?,
+        CreatedBy = ?,
+        ModifiedOn = ?,
+        ModifiedBy = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE new_auxid = ?
+    `;
+
+    const [result] = await db.query(query, [
+      AuxCode, AuxFileType, AuxLanguage, fkMLID, AuxTopic, NotesRemarks, GoogleDriveLink,
+      NoOfFiles, FilesizeBytes, ProjFileCode, ProjFileSize, ProjFileName, SRTLink,
+      CreatedOn, CreatedBy, ModifiedOn, ModifiedBy, LastModifiedBy || '', new_auxid
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Aux file with new_auxid ${new_auxid} not found.` });
+    }
+
+    res.status(200).json({ message: "Aux file updated successfully." });
+  } catch (err) {
+    console.error("❌ Database query error on /api/auxfiles/:new_auxid:", err);
+    res.status(500).json({ error: "Failed to update Aux file." });
+  }
+}); 
 // --- ENDPOINTS FOR SINGLE RECORDS ---
 
 // Endpoint to get a single event by EventCode
@@ -3178,14 +3486,29 @@ app.put('/api/editingstatus/:EdID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
 app.get('/api/event-category/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct fkEventCategory strings from the Events table.
     const query = `
-      SELECT DISTINCT 
-        EventCategory 
-      FROM EventCategory 
-      WHERE EventCategory IS NOT NULL AND EventCategory <> ''
-      ORDER BY EventCategory ASC
+      SELECT DISTINCT fkEventCategory
+      FROM Events
+      WHERE fkEventCategory IS NOT NULL AND TRIM(fkEventCategory) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allCategories = new Set();
+    rows.forEach(row => {
+      if (row.fkEventCategory) {
+        row.fkEventCategory.split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '')
+          .forEach(c => allCategories.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueCategories = Array.from(allCategories).sort();
+    const results = uniqueCategories.map(c => ({ fkEventCategory: c }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/event-category/options:", err);
@@ -4217,14 +4540,29 @@ app.put('/api/organizations/:OrganizationID', async (req, res) => {
 // --- NEW ENDPOINT FOR 'New Event Category' DROPDOWN ---
 app.get('/api/new-event-category/options', async (req, res) => {
   try {
+    // 1. Fetch all non-empty, distinct NewEventCategory strings from the Events table.
     const query = `
-      SELECT 
-        NewEventCategoryName 
-      FROM NewEventCategory 
-      WHERE NewEventCategoryName IS NOT NULL AND NewEventCategoryName <> ''
-      ORDER BY NewEventCategoryName ASC
+      SELECT DISTINCT NewEventCategory
+      FROM Events
+      WHERE NewEventCategory IS NOT NULL AND TRIM(NewEventCategory) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allCategories = new Set();
+    rows.forEach(row => {
+      if (row.NewEventCategory) {
+        row.NewEventCategory.split(',')
+          .map(c => c.trim())
+          .filter(c => c !== '')
+          .forEach(c => allCategories.add(c));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueCategories = Array.from(allCategories).sort();
+    const results = uniqueCategories.map(c => ({ NewEventCategory: c }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/new-event-category/options:", err);
@@ -4953,16 +5291,58 @@ app.put('/api/occasions/:OccasionID', async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'TopicSource' & 'NumberSource' DROPDOWN ---
+app.get('/api/number-source/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT NumberSource
+      FROM NewMediaLog
+      WHERE NumberSource IS NOT NULL AND TRIM(NumberSource) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    const allSources = new Set();
+    rows.forEach(row => {
+      if (row.NumberSource) {
+        row.NumberSource.split(',')
+          .map(s => s.trim())
+          .filter(s => s !== '')
+          .forEach(s => allSources.add(s));
+      }
+    });
+
+    const uniqueSources = Array.from(allSources).sort();
+    const results = uniqueSources.map(s => ({ NumberSource: s }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/number-source/options:", err);
+    res.status(500).json({ error: 'Failed to fetch number source options.' });
+  }
+});
+
+
 app.get('/api/topic-source/options', async (req, res) => {
   try {
     const query = `
-      SELECT DISTINCT 
-        TNName 
-      FROM TopicNumberSource 
-      WHERE TNName IS NOT NULL AND TNName <> ''
-      ORDER BY TNName ASC
+      SELECT DISTINCT TopicSource
+      FROM NewMediaLog
+      WHERE TopicSource IS NOT NULL AND TRIM(TopicSource) <> ''
     `;
-    const [results] = await db.query(query);
+    const [rows] = await db.query(query);
+
+    const allSources = new Set();
+    rows.forEach(row => {
+      if (row.TopicSource) {
+        row.TopicSource.split(',')
+          .map(s => s.trim())
+          .filter(s => s !== '')
+          .forEach(s => allSources.add(s));
+      }
+    });
+
+    const uniqueSources = Array.from(allSources).sort();
+    const results = uniqueSources.map(s => ({ TopicSource: s }));
+
     res.status(200).json(results);
   } catch (err) {
     console.error("❌ Database query error on /api/topic-source/options:", err);
@@ -5911,6 +6291,39 @@ app.put('/api/segment-category/:SegCatID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/segment-category/:SegCatID:", err);
     res.status(500).json({ error: "Failed to update Segment Category." });
+  }
+});
+
+
+app.get('/api/is-audio-recorded/options', async (req, res) => {
+  try {
+    // 1. Fetch all non-empty, distinct IsAudioRecorded strings from the NewMediaLog table.
+    const query = `
+      SELECT DISTINCT IsAudioRecorded
+      FROM NewMediaLog
+      WHERE IsAudioRecorded IS NOT NULL AND TRIM(IsAudioRecorded) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    // 2. Process the results to get individual unique values.
+    const allValues = new Set();
+    rows.forEach(row => {
+      if (row.IsAudioRecorded) {
+        row.IsAudioRecorded.split(',')
+          .map(v => v.trim())
+          .filter(v => v !== '')
+          .forEach(v => allValues.add(v));
+      }
+    });
+
+    // 3. Convert the Set to a sorted array of objects for the frontend.
+    const uniqueValues = Array.from(allValues).sort();
+    const results = uniqueValues.map(v => ({ IsAudioRecorded: v }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/is-audio-recorded/options:", err);
+    res.status(500).json({ error: 'Failed to fetch IsAudioRecorded options.' });
   }
 });
 // Start server
