@@ -2704,37 +2704,72 @@ app.get('/api/audio/export', async (req, res) => {
 });
 
 app.put('/api/audio/:AID', async (req, res) => {
-  const { AID } = req.params; // Extract the Audio ID from the URL
-  const { AudioList } = req.body; // Extract the AudioList from the request body
+  const { AID } = req.params;
+  const { AudioList, Distribution, LastModifiedBy } = req.body;
 
   if (!AID) {
     return res.status(400).json({ error: "Audio ID (AID) is required." });
   }
 
-  if (!AudioList) {
-    return res.status(400).json({ error: "AudioList is required." });
-  }
-
   try {
     const query = `
       UPDATE Audio
-      SET AudioList = ?, LastModifiedTimestamp = NOW()
+      SET
+        AudioList = ?,
+        Distribution = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
       WHERE AID = ?
     `;
 
-    const [result] = await db.query(query, [AudioList, AID]);
+    const [result] = await db.query(query, [
+      AudioList, Distribution, LastModifiedBy || '', AID
+    ]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Audio with ID ${AID} not found.` });
     }
 
-    res.status(200).json({ message: "AudioList updated successfully." });
+    res.status(200).json({ message: "Audio updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/audio/:AID:", err);
-    res.status(500).json({ error: "Failed to update AudioList." });
+    res.status(500).json({ error: "Failed to update Audio." });
   }
 });
 
+app.post('/api/audio', async (req, res) => {
+  const { AudioList, Distribution, LastModifiedBy } = req.body;
+
+  if (!AudioList) {
+    return res.status(400).json({ error: "AudioList is required." });
+  }
+  if (!Distribution) {
+    return res.status(400).json({ error: "Distribution is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO Audio (AudioList, Distribution, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [AudioList, Distribution, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Audio record added successfully.",
+      AID: result.insertId,
+      AudioList,
+      Distribution,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/audio:", err);
+    res.status(500).json({ error: "Failed to add Audio record." });
+  }
+});
 
 // --- NEW ENDPOINT FOR 'BhajanName' DROPDOWN ---
 app.get('/api/bhajan-type/options', async (req, res) => {
@@ -2855,25 +2890,27 @@ app.get('/api/bhajan-type/export', async (req, res) => {
 });
 
 app.put('/api/bhajantype/:BTID', async (req, res) => {
-  const { BTID } = req.params; // Extract the Bhajan Type ID from the URL
-  const { BhajanName } = req.body; // Extract the BhajanName from the request body
+  const { BTID } = req.params;
+  const { BhajanName, LastModifiedBy } = req.body;
 
   if (!BTID) {
     return res.status(400).json({ error: "Bhajan Type ID (BTID) is required." });
   }
-
   if (!BhajanName) {
     return res.status(400).json({ error: "BhajanName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE BhajanTypes
-      SET BhajanName = ?, LastModifiedTimestamp = NOW()
+      SET BhajanName = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE BTID = ?
     `;
 
-    const [result] = await db.query(query, [BhajanName, BTID]);
+    const [result] = await db.query(query, [BhajanName, LastModifiedBy, BTID]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Bhajan Type with ID ${BTID} not found.` });
@@ -2883,6 +2920,36 @@ app.put('/api/bhajantype/:BTID', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/bhajantype/:BTID:", err);
     res.status(500).json({ error: "Failed to update BhajanName." });
+  }
+});
+
+app.post('/api/bhajan-type', async (req, res) => {
+  const { BhajanName, LastModifiedBy } = req.body;
+
+  if (!BhajanName) {
+    return res.status(400).json({ error: "BhajanName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO BhajanTypes (BhajanName, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [BhajanName, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Bhajan Type added successfully.",
+      BTID: result.insertId,
+      BhajanName,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/bhajan-type:", err);
+    res.status(500).json({ error: "Failed to add Bhajan Type." });
   }
 });
 // --- NEW ENDPOINT FOR 'fkDigitalMasterCategory' DROPDOWN ---
@@ -3004,37 +3071,65 @@ app.get('/api/digital-master-category/export', async (req, res) => {
 });
 
 app.put('/api/digitalmastercategory/:DMCID', async (req, res) => {
-  const { DMCID } = req.params; // Extract the Digital Master Category ID from the URL
-  const { DMCategory_name } = req.body; // Extract the DMCategory_name from the request body
+  const { DMCID } = req.params;
+  const { DMCategory_name, LastModifiedBy } = req.body;
 
   if (!DMCID) {
-    return res.status(400).json({ error: "Digital Master Category ID (DMCID) is required." });
+    return res.status(400).json({ error: "DMCID is required." });
   }
-
   if (!DMCategory_name) {
     return res.status(400).json({ error: "DMCategory_name is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE DigitalMasterCategory
-      SET DMCategory_name = ?, LastModifiedTimestamp = NOW()
+      SET DMCategory_name = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE DMCID = ?
     `;
-
-    const [result] = await db.query(query, [DMCategory_name, DMCID]);
-
+    const [result] = await db.query(query, [DMCategory_name, LastModifiedBy, DMCID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Digital Master Category with ID ${DMCID} not found.` });
     }
-
     res.status(200).json({ message: "DMCategory_name updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/digitalmastercategory/:DMCID:", err);
+    console.error("❌ Database query error on /api/digital-master-category/:DMCID:", err);
     res.status(500).json({ error: "Failed to update DMCategory_name." });
   }
 });
 
+app.post('/api/digital-master-category', async (req, res) => {
+  const { DMCategory_name, LastModifiedBy } = req.body;
+
+  if (!DMCategory_name) {
+    return res.status(400).json({ error: "DMCategory_name is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO DigitalMasterCategory (DMCategory_name, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [DMCategory_name, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Digital Master Category added successfully.",
+      DMCID: result.insertId,
+      DMCategory_name,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/digital-master-category:", err);
+    res.status(500).json({ error: "Failed to add Digital Master Category." });
+  }
+});
 // --- NEW ENDPOINT FOR 'fkDistributionLabel' DROPDOWN ---
 app.get('/api/distribution-label/options', async (req, res) => {
   try {
@@ -3154,38 +3249,66 @@ app.get('/api/distribution-label/export', async (req, res) => {
 });
 
 app.put('/api/distributionlabel/:LabelID', async (req, res) => {
-  const { LabelID } = req.params; // Extract the Label ID from the URL
-  const { LabelName } = req.body; // Extract the LabelName from the request body
+ const { LabelID } = req.params;
+  const { LabelName, LastModifiedBy } = req.body;
 
   if (!LabelID) {
-    return res.status(400).json({ error: "Label ID (LabelID) is required." });
+    return res.status(400).json({ error: "LabelID is required." });
   }
-
   if (!LabelName) {
     return res.status(400).json({ error: "LabelName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE DistributionLabel
-      SET LabelName = ?, LastModifiedTimestamp = NOW()
+      SET LabelName = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE LabelID = ?
     `;
-
-    const [result] = await db.query(query, [LabelName, LabelID]);
-
+    const [result] = await db.query(query, [LabelName, LastModifiedBy, LabelID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Distribution Label with ID ${LabelID} not found.` });
     }
-
     res.status(200).json({ message: "LabelName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/distributionlabel/:LabelID:", err);
+    console.error("❌ Database query error on /api/distribution-label/:LabelID:", err);
     res.status(500).json({ error: "Failed to update LabelName." });
   }
 });
 
 
+app.post('/api/distribution-label', async (req, res) => {
+  const { LabelName, LastModifiedBy } = req.body;
+
+  if (!LabelName) {
+    return res.status(400).json({ error: "LabelName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO DistributionLabel (LabelName, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [LabelName, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Distribution Label added successfully.",
+      LabelID: result.insertId,
+      LabelName,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/distribution-label:", err);
+    res.status(500).json({ error: "Failed to add Distribution Label." });
+  }
+});
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
 app.get('/api/editing-type/options', async (req, res) => {
   try {
@@ -3305,37 +3428,73 @@ app.get('/api/editing-type/export', async (req, res) => {
 });
 
 app.put('/api/editingtype/:EdID', async (req, res) => {
-  const { EdID } = req.params; // Extract the Editing Type ID from the URL
-  const { EdType } = req.body; // Extract the EdType from the request body
+  const { EdID } = req.params;
+  const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
   if (!EdID) {
-    return res.status(400).json({ error: "Editing Type ID (EdID) is required." });
+    return res.status(400).json({ error: "EdID is required." });
   }
-
   if (!EdType) {
     return res.status(400).json({ error: "EdType is required." });
+  }
+  if (!AudioVideo) {
+    return res.status(400).json({ error: "AudioVideo is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE EditingType
-      SET EdType = ?, LastModifiedTimestamp = NOW()
+      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE EdID = ?
     `;
-
-    const [result] = await db.query(query, [EdType, EdID]);
-
+    const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy, EdID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Editing Type with ID ${EdID} not found.` });
     }
-
-    res.status(200).json({ message: "EdType updated successfully." });
+    res.status(200).json({ message: "Editing Type updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/editingtype/:EdID:", err);
-    res.status(500).json({ error: "Failed to update EdType." });
+    console.error("❌ Database query error on /api/editing-type/:EdID:", err);
+    res.status(500).json({ error: "Failed to update Editing Type." });
   }
 });
 
+
+app.post('/api/editing-type', async (req, res) => {
+  const { EdType, AudioVideo, LastModifiedBy } = req.body;
+
+  if (!EdType) {
+    return res.status(400).json({ error: "EdType is required." });
+  }
+  if (!AudioVideo) {
+    return res.status(400).json({ error: "AudioVideo is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Editing Type added successfully.",
+      EdID: result.insertId,
+      EdType,
+      AudioVideo,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/editing-type:", err);
+    res.status(500).json({ error: "Failed to add Editing Type." });
+  }
+});
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
 app.get('/api/editing-status/options', async (req, res) => {
   try {
@@ -3452,37 +3611,64 @@ app.get('/api/editing-status/export', async (req, res) => {
 });
 
 app.put('/api/editingstatus/:EdID', async (req, res) => {
-  const { EdID } = req.params; // Extract the Editing Status ID from the URL
-  const { EdType } = req.body; // Extract the EdType from the request body
+  const { EdID } = req.params;
+  const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
-  if (!EdID) {
-    return res.status(400).json({ error: "Editing Status ID (EdID) is required." });
-  }
-
-  if (!EdType) {
-    return res.status(400).json({ error: "EdType is required." });
-  }
+  if (!EdID) return res.status(400).json({ error: "EdID is required." });
+  if (!EdType) return res.status(400).json({ error: "EdType is required." });
+  if (!AudioVideo) return res.status(400).json({ error: "AudioVideo is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE EditingType
-      SET EdType = ?, LastModifiedTimestamp = NOW()
+      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE EdID = ?
     `;
-
-    const [result] = await db.query(query, [EdType, EdID]);
-
+    const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy, EdID]);
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: `Editing Type with ID ${EdID} not found.` });
+      return res.status(404).json({ error: `Editing Status with ID ${EdID} not found.` });
     }
-
-    res.status(200).json({ message: "EdType updated successfully." });
+    res.status(200).json({ message: "Editing Status updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/editingtype/:EdID:", err);
-    res.status(500).json({ error: "Failed to update EdType." });
+    console.error("❌ Database query error on /api/editing-status/:EdID:", err);
+    res.status(500).json({ error: "Failed to update Editing Status." });
   }
 });
 
+app.post('/api/editing-status', async (req, res) => {
+  const { EdType, AudioVideo, LastModifiedBy } = req.body;
+
+  if (!EdType) {
+    return res.status(400).json({ error: "EdType is required." });
+  }
+  if (!AudioVideo) {
+    return res.status(400).json({ error: "AudioVideo is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Editing Status added successfully.",
+      EdID: result.insertId,
+      EdType,
+      AudioVideo,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/editing-status:", err);
+    res.status(500).json({ error: "Failed to add Editing Status." });
+  }
+});
 // --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
 app.get('/api/event-category/options', async (req, res) => {
   try {
@@ -3603,37 +3789,59 @@ app.get('/api/event-category/export', async (req, res) => {
 });
 
 app.put('/api/eventcategory/:EventCategoryID', async (req, res) => {
-  const { EventCategoryID } = req.params; // Extract the Event Category ID from the URL
-  const { EventCategory } = req.body; // Extract the EventCategory from the request body
+    const { EventCategoryID } = req.params;
+  const { EventCategory, LastModifiedBy } = req.body;
 
-  if (!EventCategoryID) {
-    return res.status(400).json({ error: "Event Category ID (EventCategoryID) is required." });
-  }
-
-  if (!EventCategory) {
-    return res.status(400).json({ error: "EventCategory is required." });
-  }
+  if (!EventCategoryID) return res.status(400).json({ error: "EventCategoryID is required." });
+  if (!EventCategory) return res.status(400).json({ error: "EventCategory is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE EventCategory
-      SET EventCategory = ?, LastModifiedTimestamp = NOW()
+      SET EventCategory = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE EventCategoryID = ?
     `;
-
-    const [result] = await db.query(query, [EventCategory, EventCategoryID]);
-
+    const [result] = await db.query(query, [EventCategory, LastModifiedBy, EventCategoryID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Event Category with ID ${EventCategoryID} not found.` });
     }
-
-    res.status(200).json({ message: "EventCategory updated successfully." });
+    res.status(200).json({ message: "Event Category updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/eventcategory/:EventCategoryID:", err);
-    res.status(500).json({ error: "Failed to update EventCategory." });
+    console.error("❌ Database query error on /api/event-category/:EventCategoryID:", err);
+    res.status(500).json({ error: "Failed to update Event Category." });
   }
 });
 
+app.post('/api/event-category', async (req, res) => {
+  const { EventCategory, LastModifiedBy } = req.body;
+
+  if (!EventCategory) {
+    return res.status(400).json({ error: "EventCategory is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO EventCategory (EventCategory, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [EventCategory, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Event Category added successfully.",
+      EventCategoryID: result.insertId,
+      EventCategory,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/event-category:", err);
+    res.status(500).json({ error: "Failed to add Event Category." });
+  }
+});
 // --- NEW ENDPOINT FOR 'FootageType' DROPDOWN ---
 app.get('/api/footage-type/options', async (req, res) => {
   try {
@@ -3787,34 +3995,57 @@ app.get('/api/format-type/options', async (req, res) => {
 });
 
 app.put('/api/footagetype/:FootageID', async (req, res) => {
-  const { FootageID } = req.params; // Extract the Footage ID from the URL
-  const { FootageTypeList } = req.body; // Extract the FootageTypeList from the request body
+  const { FootageID } = req.params;
+  const { FootageTypeList, LastModifiedBy } = req.body;
 
-  if (!FootageID) {
-    return res.status(400).json({ error: "Footage ID (FootageID) is required." });
-  }
-
-  if (!FootageTypeList) {
-    return res.status(400).json({ error: "FootageTypeList is required." });
-  }
+  if (!FootageID) return res.status(400).json({ error: "FootageID is required." });
+  if (!FootageTypeList) return res.status(400).json({ error: "FootageTypeList is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE FootageTypes
-      SET FootageTypeList = ?, LastModifiedTimestamp = NOW()
+      SET FootageTypeList = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE FootageID = ?
     `;
-
-    const [result] = await db.query(query, [FootageTypeList, FootageID]);
-
+    const [result] = await db.query(query, [FootageTypeList, LastModifiedBy, FootageID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Footage Type with ID ${FootageID} not found.` });
     }
-
-    res.status(200).json({ message: "FootageTypeList updated successfully." });
+    res.status(200).json({ message: "Footage Type updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/footagetype/:FootageID:", err);
-    res.status(500).json({ error: "Failed to update FootageTypeList." });
+    console.error("❌ Database query error on /api/footage-type/:FootageID:", err);
+    res.status(500).json({ error: "Failed to update Footage Type." });
+  }
+});
+
+app.post('/api/footage-type', async (req, res) => {
+  const { FootageTypeList, LastModifiedBy } = req.body;
+
+  if (!FootageTypeList) {
+    return res.status(400).json({ error: "FootageTypeList is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO FootageTypes (FootageTypeList, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [FootageTypeList, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Footage Type added successfully.",
+      FootageID: result.insertId,
+      FootageTypeList,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/footage-type:", err);
+    res.status(500).json({ error: "Failed to add Footage Type." });
   }
 });
 
@@ -3904,30 +4135,29 @@ app.get('/api/format-type/export', async (req, res) => {
 });
 
 app.put('/api/formattype/:FTID', async (req, res) => {
-  const { FTID } = req.params; // Extract the Format Type ID from the URL
-  const { Type } = req.body; // Extract the Type from the request body
+    const { FTID } = req.params;
+  const { Type, LastModifiedBy } = req.body;
 
   if (!FTID) {
     return res.status(400).json({ error: "Format Type ID (FTID) is required." });
   }
-
   if (!Type) {
     return res.status(400).json({ error: "Type is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE Format
-      SET Type = ?, LastModifiedTimestamp = NOW()
+      SET Type = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE FTID = ?
     `;
-
-    const [result] = await db.query(query, [Type, FTID]);
-
+    const [result] = await db.query(query, [Type, LastModifiedBy, FTID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Format Type with ID ${FTID} not found.` });
     }
-
     res.status(200).json({ message: "Type updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/formattype/:FTID:", err);
@@ -3935,6 +4165,36 @@ app.put('/api/formattype/:FTID', async (req, res) => {
   }
 });
 
+
+app.post('/api/format-type', async (req, res) => {
+  const { Type, LastModifiedBy } = req.body;
+
+  if (!Type) {
+    return res.status(400).json({ error: "Type is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO Format (Type, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [Type, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Format Type added successfully.",
+      FTID: result.insertId,
+      Type,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/format-type:", err);
+    res.status(500).json({ error: "Failed to add Format Type." });
+  }
+});
 // --- NEW ENDPOINT FOR 'fkGranth' DROPDOWN ---
 app.get('/api/granths/options', async (req, res) => {
   try {
@@ -4053,30 +4313,29 @@ app.get('/api/granths/export', async (req, res) => {
 });
 
 app.put('/api/granths/:ID', async (req, res) => {
-  const { ID } = req.params; // Extract the Granth ID from the URL
-  const { Name } = req.body; // Extract the Name from the request body
+  const { ID } = req.params;
+  const { Name, LastModifiedBy } = req.body;
 
   if (!ID) {
     return res.status(400).json({ error: "Granth ID (ID) is required." });
   }
-
   if (!Name) {
     return res.status(400).json({ error: "Name is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE NewGranths
-      SET Name = ?, LastModifiedTimestamp = NOW()
+      SET Name = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE ID = ?
     `;
-
-    const [result] = await db.query(query, [Name, ID]);
-
+    const [result] = await db.query(query, [Name, LastModifiedBy, ID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Granth with ID ${ID} not found.` });
     }
-
     res.status(200).json({ message: "Name updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/granths/:ID:", err);
@@ -4084,6 +4343,35 @@ app.put('/api/granths/:ID', async (req, res) => {
   }
 });
 
+app.post('/api/granths', async (req, res) => {
+  const { Name, LastModifiedBy } = req.body;
+
+  if (!Name) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO NewGranths (Name, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [Name, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Granth added successfully.",
+      ID: result.insertId,
+      Name,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/granths:", err);
+    res.status(500).json({ error: "Failed to add Granth." });
+  }
+});
 // --- NEW ENDPOINT FOR 'Language' DROPDOWN ---
 app.get('/api/language/options', async (req, res) => {
   try {
@@ -4203,30 +4491,23 @@ app.get('/api/language/export', async (req, res) => {
 });
 
 app.put('/api/language/:STID', async (req, res) => {
-  const { STID } = req.params; // Extract the Language ID from the URL
-  const { TitleLanguage } = req.body; // Extract the TitleLanguage from the request body
+  const { STID } = req.params;
+  const { TitleLanguage, LastModifiedBy } = req.body;
 
-  if (!STID) {
-    return res.status(400).json({ error: "Language ID (STID) is required." });
-  }
-
-  if (!TitleLanguage) {
-    return res.status(400).json({ error: "TitleLanguage is required." });
-  }
+  if (!STID) return res.status(400).json({ error: "STID is required." });
+  if (!TitleLanguage) return res.status(400).json({ error: "TitleLanguage is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE SubTitlesLanguages
-      SET TitleLanguage = ?, LastModifiedTimestamp = NOW()
+      SET TitleLanguage = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE STID = ?
     `;
-
-    const [result] = await db.query(query, [TitleLanguage, STID]);
-
+    const [result] = await db.query(query, [TitleLanguage, LastModifiedBy, STID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Language with ID ${STID} not found.` });
     }
-
     res.status(200).json({ message: "TitleLanguage updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/language/:STID:", err);
@@ -4234,6 +4515,35 @@ app.put('/api/language/:STID', async (req, res) => {
   }
 });
 
+app.post('/api/language', async (req, res) => {
+  const { TitleLanguage, LastModifiedBy } = req.body;
+
+  if (!TitleLanguage) {
+    return res.status(400).json({ error: "TitleLanguage is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO SubTitlesLanguages (TitleLanguage, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [TitleLanguage, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Language added successfully.",
+      STID: result.insertId,
+      TitleLanguage,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/language:", err);
+    res.status(500).json({ error: "Failed to add Language." });
+  }
+});
 // --- NEW ENDPOINT FOR 'MQName' DROPDOWN ---
 app.get('/api/master-quality/options', async (req, res) => {
   try {
@@ -4355,34 +4665,57 @@ app.get('/api/master-quality/export', async (req, res) => {
 
 
 app.put('/api/master-quality/:MQID', async (req, res) => {
-  const { MQID } = req.params; // Extract the Master Quality ID from the URL
-  const { MQName } = req.body; // Extract the MQName from the request body
+  const { MQID } = req.params;
+  const { MQName, LastModifiedBy } = req.body;
 
-  if (!MQID) {
-    return res.status(400).json({ error: "Master Quality ID (MQID) is required." });
-  }
-
-  if (!MQName) {
-    return res.status(400).json({ error: "MQName is required." });
-  }
+  if (!MQID) return res.status(400).json({ error: "MQID is required." });
+  if (!MQName) return res.status(400).json({ error: "MQName is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE MasterQuality
-      SET MQName = ?, LastModifiedTimestamp = NOW()
+      SET MQName = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE MQID = ?
     `;
-
-    const [result] = await db.query(query, [MQName, MQID]);
-
+    const [result] = await db.query(query, [MQName, LastModifiedBy, MQID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Master Quality with ID ${MQID} not found.` });
     }
-
     res.status(200).json({ message: "MQName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/masterquality/:MQID:", err);
+    console.error("❌ Database query error on /api/master-quality/:MQID:", err);
     res.status(500).json({ error: "Failed to update MQName." });
+  }
+});
+
+app.post('/api/master-quality', async (req, res) => {
+  const { MQName, LastModifiedBy } = req.body;
+
+  if (!MQName) {
+    return res.status(400).json({ error: "MQName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO MasterQuality (MQName, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [MQName, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Master Quality added successfully.",
+      MQID: result.insertId,
+      MQName,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/master-quality:", err);
+    res.status(500).json({ error: "Failed to add Master Quality." });
   }
 });
 
@@ -4506,36 +4839,61 @@ app.get('/api/organizations/export', async (req, res) => {
 });
 
 app.put('/api/organizations/:OrganizationID', async (req, res) => {
-  const { OrganizationID } = req.params; // Extract the Organization ID from the URL
-  const { Organization } = req.body; // Extract the Organization from the request body
+  const { OrganizationID } = req.params;
+  const { Organization, LastModifiedBy } = req.body;
 
-  if (!OrganizationID) {
-    return res.status(400).json({ error: "Organization ID (OrganizationID) is required." });
-  }
-
-  if (!Organization) {
-    return res.status(400).json({ error: "Organization is required." });
-  }
+  if (!OrganizationID) return res.status(400).json({ error: "OrganizationID is required." });
+  if (!Organization) return res.status(400).json({ error: "Organization is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE Organizations
-      SET Organization = ?, LastModifiedTimestamp = NOW()
+      SET Organization = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE OrganizationID = ?
     `;
-
-    const [result] = await db.query(query, [Organization, OrganizationID]);
-
+    const [result] = await db.query(query, [Organization, LastModifiedBy, OrganizationID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Organization with ID ${OrganizationID} not found.` });
     }
-
     res.status(200).json({ message: "Organization updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/organizations/:OrganizationID:", err);
     res.status(500).json({ error: "Failed to update Organization." });
   }
 });
+
+
+app.post('/api/organizations', async (req, res) => {
+  const { Organization, LastModifiedBy } = req.body;
+
+  if (!Organization) {
+    return res.status(400).json({ error: "Organization is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO Organizations (Organization, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [Organization, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Organization added successfully.",
+      OrganizationID: result.insertId,
+      Organization,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/organizations:", err);
+    res.status(500).json({ error: "Failed to add Organization." });
+  }
+});
+
 
 // --- NEW ENDPOINT FOR 'New Event Category' DROPDOWN ---
 app.get('/api/new-event-category/options', async (req, res) => {
@@ -4657,34 +5015,58 @@ app.get('/api/new-event-category/export', async (req, res) => {
 });
 
 app.put('/api/neweventcategory/:CategoryID', async (req, res) => {
-  const { CategoryID } = req.params; // Extract the Category ID from the URL
-  const { NewEventCategoryName } = req.body; // Extract the NewEventCategoryName from the request body
+  const { SrNo } = req.params;
+  const { NewEventCategoryName, LastModifiedBy, MARK_DISCARD } = req.body;
 
-  if (!CategoryID) {
-    return res.status(400).json({ error: "Category ID (CategoryID) is required." });
-  }
-
-  if (!NewEventCategoryName) {
-    return res.status(400).json({ error: "NewEventCategoryName is required." });
-  }
+  if (!SrNo) return res.status(400).json({ error: "SrNo is required." });
+  if (!NewEventCategoryName) return res.status(400).json({ error: "NewEventCategoryName is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE NewEventCategory
-      SET NewEventCategoryName = ?, LastModifiedTimestamp = NOW()
+      SET NewEventCategoryName = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW(), MARK_DISCARD = ?
       WHERE SrNo = ?
     `;
-
-    const [result] = await db.query(query, [NewEventCategoryName, CategoryID]);
-
+    const [result] = await db.query(query, [NewEventCategoryName, LastModifiedBy, MARK_DISCARD || '', SrNo]);
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: `Event Category with ID ${CategoryID} not found.` });
+      return res.status(404).json({ error: `Event Category with SrNo ${SrNo} not found.` });
     }
-
     res.status(200).json({ message: "NewEventCategoryName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/neweventcategory/:CategoryID:", err);
+    console.error("❌ Database query error on /api/new-event-category/:SrNo:", err);
     res.status(500).json({ error: "Failed to update NewEventCategoryName." });
+  }
+});
+
+app.post('/api/new-event-category', async (req, res) => {
+  const { NewEventCategoryName, MARK_DISCARD, LastModifiedBy } = req.body;
+
+  if (!NewEventCategoryName) {
+    return res.status(400).json({ error: "NewEventCategoryName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO NewEventCategory (NewEventCategoryName, MARK_DISCARD, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [NewEventCategoryName, MARK_DISCARD || "0", LastModifiedBy]);
+
+    res.status(201).json({
+      message: "New Event Category added successfully.",
+      SrNo: result.insertId,
+      NewEventCategoryName,
+      MARK_DISCARD: MARK_DISCARD || "0",
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/new-event-category:", err);
+    res.status(500).json({ error: "Failed to add New Event Category." });
   }
 });
 
@@ -4807,34 +5189,57 @@ app.get('/api/new-cities/export', async (req, res) => {
 });
 
 app.put('/api/newcities/:CityID', async (req, res) => {
-  const { CityID } = req.params; // Extract the City ID from the URL
-  const { City } = req.body; // Extract the City from the request body
+   const { CityID } = req.params;
+  const { City, LastModifiedBy } = req.body;
 
-  if (!CityID) {
-    return res.status(400).json({ error: "City ID (CityID) is required." });
-  }
-
-  if (!City) {
-    return res.status(400).json({ error: "City is required." });
-  }
+  if (!CityID) return res.status(400).json({ error: "CityID is required." });
+  if (!City) return res.status(400).json({ error: "City is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE NewCities
-      SET City = ?, LastModifiedTimestamp = NOW()
+      SET City = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE CityID = ?
     `;
-
-    const [result] = await db.query(query, [City, CityID]);
-
+    const [result] = await db.query(query, [City, LastModifiedBy, CityID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `City with ID ${CityID} not found.` });
     }
-
     res.status(200).json({ message: "City updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/newcities/:CityID:", err);
+    console.error("❌ Database query error on /api/new-cities/:CityID:", err);
     res.status(500).json({ error: "Failed to update City." });
+  }
+});
+
+app.post('/api/new-cities', async (req, res) => {
+  const { City, LastModifiedBy } = req.body;
+
+  if (!City) {
+    return res.status(400).json({ error: "City is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO NewCities (City, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [City, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "City added successfully.",
+      CityID: result.insertId,
+      City,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/new-cities:", err);
+    res.status(500).json({ error: "Failed to add City." });
   }
 });
 
@@ -4958,38 +5363,59 @@ app.get('/api/new-countries/export', async (req, res) => {
 });
 
 app.put('/api/newcountries/:CountryID', async (req, res) => {
-  const { CountryID } = req.params; // Extract the Country ID from the URL
-  const { Country } = req.body; // Extract the Country from the request body
+  const { CountryID } = req.params;
+  const { Country, LastModifiedBy } = req.body;
 
-  if (!CountryID) {
-    return res.status(400).json({ error: "Country ID (CountryID) is required." });
-  }
-
-  if (!Country) {
-    return res.status(400).json({ error: "Country is required." });
-  }
+  if (!CountryID) return res.status(400).json({ error: "CountryID is required." });
+  if (!Country) return res.status(400).json({ error: "Country is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE NewCountries
-      SET Country = ?, LastModifiedTimestamp = NOW()
+      SET Country = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE CountryID = ?
     `;
-
-    const [result] = await db.query(query, [Country, CountryID]);
-
+    const [result] = await db.query(query, [Country, LastModifiedBy, CountryID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Country with ID ${CountryID} not found.` });
     }
-
     res.status(200).json({ message: "Country updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/newcountries/:CountryID:", err);
+    console.error("❌ Database query error on /api/new-countries/:CountryID:", err);
     res.status(500).json({ error: "Failed to update Country." });
   }
 });
 
+app.post('/api/new-countries', async (req, res) => {
+  const { Country, LastModifiedBy } = req.body;
 
+  if (!Country) {
+    return res.status(400).json({ error: "Country is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO NewCountries (Country, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [Country, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Country added successfully.",
+      CountryID: result.insertId,
+      Country,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/new-countries:", err);
+    res.status(500).json({ error: "Failed to add Country." });
+  }
+});
 // --- NEW ENDPOINT FOR 'fkState' DROPDOWN ---
 app.get('/api/states/options', async (req, res) => {
   try {
@@ -5109,34 +5535,57 @@ app.get('/api/new-states/export', async (req, res) => {
 });
 
 app.put('/api/newstates/:StateID', async (req, res) => {
-  const { StateID } = req.params; // Extract the State ID from the URL
-  const { State } = req.body; // Extract the State from the request body
+ const { StateID } = req.params;
+  const { State, LastModifiedBy } = req.body;
 
-  if (!StateID) {
-    return res.status(400).json({ error: "State ID (StateID) is required." });
-  }
-
-  if (!State) {
-    return res.status(400).json({ error: "State is required." });
-  }
+  if (!StateID) return res.status(400).json({ error: "StateID is required." });
+  if (!State) return res.status(400).json({ error: "State is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE NewStates
-      SET State = ?, LastModifiedTimestamp = NOW()
+      SET State = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE StateID = ?
     `;
-
-    const [result] = await db.query(query, [State, StateID]);
-
+    const [result] = await db.query(query, [State, LastModifiedBy, StateID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `State with ID ${StateID} not found.` });
     }
-
     res.status(200).json({ message: "State updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/newstates/:StateID:", err);
     res.status(500).json({ error: "Failed to update State." });
+  }
+});
+
+app.post('/api/new-states', async (req, res) => {
+  const { State, LastModifiedBy } = req.body;
+
+  if (!State) {
+    return res.status(400).json({ error: "State is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO NewStates (State, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [State, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "State added successfully.",
+      StateID: result.insertId,
+      State,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/new-states:", err);
+    res.status(500).json({ error: "Failed to add State." });
   }
 });
 
@@ -5259,30 +5708,23 @@ app.get('/api/occasions/export', async (req, res) => {
 });
 
 app.put('/api/occasions/:OccasionID', async (req, res) => {
-  const { OccasionID } = req.params; // Extract the Occasion ID from the URL
-  const { Occasion } = req.body; // Extract the Occasion from the request body
+   const { OccasionID } = req.params;
+  const { Occasion, LastModifiedBy } = req.body;
 
-  if (!OccasionID) {
-    return res.status(400).json({ error: "Occasion ID (OccasionID) is required." });
-  }
-
-  if (!Occasion) {
-    return res.status(400).json({ error: "Occasion is required." });
-  }
+  if (!OccasionID) return res.status(400).json({ error: "OccasionID is required." });
+  if (!Occasion) return res.status(400).json({ error: "Occasion is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE Occasions
-      SET Occasion = ?, LastModifiedTimestamp = NOW()
+      SET Occasion = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE OccasionID = ?
     `;
-
-    const [result] = await db.query(query, [Occasion, OccasionID]);
-
+    const [result] = await db.query(query, [Occasion, LastModifiedBy, OccasionID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Occasion with ID ${OccasionID} not found.` });
     }
-
     res.status(200).json({ message: "Occasion updated successfully." });
   } catch (err) {
     console.error("❌ Database query error on /api/occasions/:OccasionID:", err);
@@ -5290,6 +5732,35 @@ app.put('/api/occasions/:OccasionID', async (req, res) => {
   }
 });
 
+app.post('/api/occasions', async (req, res) => {
+  const { Occasion, LastModifiedBy } = req.body;
+
+  if (!Occasion) {
+    return res.status(400).json({ error: "Occasion is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO Occasions (Occasion, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [Occasion, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Occasion added successfully.",
+      OccasionID: result.insertId,
+      Occasion,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/occasions:", err);
+    res.status(500).json({ error: "Failed to add Occasion." });
+  }
+});
 // --- NEW ENDPOINT FOR 'TopicSource' & 'NumberSource' DROPDOWN ---
 app.get('/api/number-source/options', async (req, res) => {
   try {
@@ -5400,34 +5871,57 @@ app.get('/api/topic-number-source', async (req, res) => {
 });
 
 app.put('/api/topicnumbersource/:TNID', async (req, res) => {
-  const { TNID } = req.params; // Extract the Topic Number ID from the URL
-  const { TNName } = req.body; // Extract the TNName from the request body
+  const { TNID } = req.params;
+  const { TNName, LastModifiedBy } = req.body;
 
-  if (!TNID) {
-    return res.status(400).json({ error: "Topic Number ID (TNID) is required." });
-  }
-
-  if (!TNName) {
-    return res.status(400).json({ error: "TNName is required." });
-  }
+  if (!TNID) return res.status(400).json({ error: "TNID is required." });
+  if (!TNName) return res.status(400).json({ error: "TNName is required." });
+  if (!LastModifiedBy) return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
 
   try {
     const query = `
       UPDATE TopicNumberSource
-      SET TNName = ?, LastModifiedTimestamp = NOW()
+      SET TNName = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE TNID = ?
     `;
-
-    const [result] = await db.query(query, [TNName, TNID]);
-
+    const [result] = await db.query(query, [TNName, LastModifiedBy, TNID]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Topic Number with ID ${TNID} not found.` });
     }
-
     res.status(200).json({ message: "TNName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/topicnumbersource/:TNID:", err);
+    console.error("❌ Database query error on /api/topic-number-source/:TNID:", err);
     res.status(500).json({ error: "Failed to update TNName." });
+  }
+});
+
+app.post('/api/topic-number-source', async (req, res) => {
+  const { TNName, LastModifiedBy } = req.body;
+
+  if (!TNName) {
+    return res.status(400).json({ error: "TNName is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO TopicNumberSource (TNName, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [TNName, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Topic Number Source added successfully.",
+      TNID: result.insertId,
+      TNName,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/topic-number-source:", err);
+    res.status(500).json({ error: "Failed to add Topic Number Source." });
   }
 });
 // ✅ ADDED: NEW ENDPOINT TO UPDATE LAST ACTIVE STATUS
@@ -5635,25 +6129,27 @@ app.get('/api/time-of-day/export', async (req, res) => {
 
 
 app.put('/api/time-of-day/:TimeID', async (req, res) => {
-  const { TimeID } = req.params;
-  const { TimeList } = req.body;
+    const { TimeID } = req.params;
+  const { TimeList, LastModifiedBy } = req.body;
 
   if (!TimeID) {
     return res.status(400).json({ error: "Time ID (TimeID) is required." });
   }
-
   if (!TimeList) {
     return res.status(400).json({ error: "TimeList is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
   }
 
   try {
     const query = `
       UPDATE TimeOfDays
-      SET TimeList = ?, LastModifiedTimestamp = NOW()
+      SET TimeList = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
       WHERE TimeID = ?
     `;
 
-    const [result] = await db.query(query, [TimeList, TimeID]);
+    const [result] = await db.query(query, [TimeList, LastModifiedBy, TimeID]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: `Time of Day with ID ${TimeID} not found.` });
@@ -5666,7 +6162,35 @@ app.put('/api/time-of-day/:TimeID', async (req, res) => {
   }
 });
 
+app.post('/api/time-of-day', async (req, res) => {
+  const { TimeList, LastModifiedBy } = req.body;
 
+  if (!TimeList) {
+    return res.status(400).json({ error: "TimeList is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO TimeOfDays (TimeList, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [TimeList, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Time of Day added successfully.",
+      TimeID: result.insertId,
+      TimeList,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/time-of-day:", err);
+    res.status(500).json({ error: "Failed to add Time of Day." });
+  }
+});
 // --- NEW ENDPOINT FOR 'AuxFileType' DROPDOWN ---
 app.get('/api/aux-file-type/options', async (req, res) => {
   try {
@@ -5820,6 +6344,35 @@ app.put('/api/aux-file-type/:AuxTypeID', async (req, res) => {
   }
 });
 
+app.post('/api/aux-file-type', async (req, res) => {
+  const { AuxFileType, LastModifiedBy } = req.body;
+
+  if (!AuxFileType) {
+    return res.status(400).json({ error: "AuxFileType is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO AuxFileType (AuxFileType, LastModifiedBy, LastModifiedTimestamp)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [AuxFileType, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Aux File Type added successfully.",
+      AuxTypeID: result.insertId,
+      AuxFileType,
+      LastModifiedBy,
+      LastModifiedTimestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/aux-file-type:", err);
+    res.status(500).json({ error: "Failed to add Aux File Type." });
+  }
+});
 
 // --- NEW ENDPOINT FOR 'Keywords' DROPDOWN ---
 app.get('/api/keywords/options', async (req, res) => {
@@ -6141,6 +6694,35 @@ app.put('/api/topic-given-by/:TGBID', async (req, res) => {
   }
 });
 
+app.post('/api/topic-given-by', async (req, res) => {
+  const { TGB_Name, LastModifiedBy } = req.body;
+
+  if (!TGB_Name) {
+    return res.status(400).json({ error: "TGB_Name is required." });
+  }
+  if (!LastModifiedBy) {
+    return res.status(400).json({ error: "LastModifiedBy (user email) is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO TopicGivenBy (TGB_Name, LastModifiedBy, LastModifiedTs)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [TGB_Name, LastModifiedBy]);
+
+    res.status(201).json({
+      message: "Topic Given By added successfully.",
+      TGBID: result.insertId,
+      TGB_Name,
+      LastModifiedBy,
+      LastModifiedTs: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/topic-given-by:", err);
+    res.status(500).json({ error: "Failed to add Topic Given By." });
+  }
+});
 app.get('/api/segment-category/options', async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct segment category strings from the database.
@@ -6294,6 +6876,32 @@ app.put('/api/segment-category/:SegCatID', async (req, res) => {
   }
 });
 
+app.post('/api/segment-category', async (req, res) => {
+  const { SegCatName, LastModifiedBy } = req.body;
+
+  if (!SegCatName) {
+    return res.status(400).json({ error: "SegCatName is required." });
+  }
+
+  try {
+    const query = `
+      INSERT INTO SegmentCategory (SegCatName, LastModifiedBy, LastModifiedTs)
+      VALUES (?, ?, NOW())
+    `;
+    const [result] = await db.query(query, [SegCatName, LastModifiedBy || '']);
+
+    res.status(201).json({
+      message: "Segment Category added successfully.",
+      SegCatID: result.insertId,
+      SegCatName,
+      LastModifiedBy: LastModifiedBy || '',
+      LastModifiedTs: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("❌ Database query error on POST /api/segment-category:", err);
+    res.status(500).json({ error: "Failed to add Segment Category." });
+  }
+});
 
 app.get('/api/is-audio-recorded/options', async (req, res) => {
   try {
