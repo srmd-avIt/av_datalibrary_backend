@@ -214,17 +214,29 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
 
 
 // ✅ REPLACEMENT for your buildOrderByClause function
-const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}) => {
-    let { sortBy, sortDirection } = queryParams;
-    const direction = (String(sortDirection).toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
+const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = []) => {
+  let { sortBy, sortDirection } = queryParams;
+  const direction = (String(sortDirection).toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
 
-    if (sortBy && allowedColumns.includes(sortBy)) {
-        const alias = tableAliases[sortBy];
-        const prefixedSortBy = alias ? `${db.escapeId(alias)}.${db.escapeId(sortBy)}` : db.escapeId(sortBy);
-        return `ORDER BY ${prefixedSortBy} ${direction}`;
+  if (sortBy && allowedColumns.includes(sortBy)) {
+    const alias = tableAliases[sortBy];
+    const prefixedSortBy = alias
+      ? `${db.escapeId(alias)}.${db.escapeId(sortBy)}`
+      : db.escapeId(sortBy);
+
+    // If this is a date column, use STR_TO_DATE for correct sorting
+    if (dateColumns.includes(sortBy)) {
+      // Adjust the format string if your date format is different!
+      return `ORDER BY STR_TO_DATE(${prefixedSortBy}, '%d-%m-%Y') ${direction}`;
     }
-    return '';
+
+    // Otherwise, normal sort
+    return `ORDER BY ${prefixedSortBy} ${direction}`;
+  }
+
+  return '';
 };
+
 
 
 // --- Events Endpoint ---
