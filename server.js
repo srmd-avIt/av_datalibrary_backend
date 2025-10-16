@@ -224,7 +224,7 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {},
       ? `${db.escapeId(alias)}.${db.escapeId(sortBy)}`
       : db.escapeId(sortBy);
 
-    // If this is a date column, use STR_TO_DATE for correct sorting
+    // If this is a date column stored as string, use STR_TO_DATE
     if (dateColumns.includes(sortBy)) {
       // Adjust the format string if your date format is different!
       return `ORDER BY STR_TO_DATE(${prefixedSortBy}, '%d-%m-%Y') ${direction}`;
@@ -236,7 +236,6 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {},
 
   return '';
 };
-
 
 
 // --- Events Endpoint ---
@@ -271,8 +270,8 @@ app.get('/api/events', async (req, res) => {
       'LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo'], // searchable fields
       filterableColumns
     );
-
-    const orderByString = buildOrderByClause(req.query, filterableColumns);
+const dateColumns = ['SubmittedDate', 'FromDate', 'ToDate', 'LastModifiedTimestamp', 'NewEventFrom', 'NewEventTo'];
+const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
 
     // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM Events ${whereString}`;
@@ -433,8 +432,11 @@ app.get('/api/newmedialog', async (req, res) => {
       filterableColumns
     );
 
-    const orderByString = buildOrderByClause(req.query, filterableColumns);
+  const dateColumns = [
+  "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
+];
 
+const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
     // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM NewMediaLog ${whereString}`;
     const [[{ total }]] = await db.query(countQuery, params);
