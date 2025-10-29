@@ -446,15 +446,37 @@ app.get('/api/newmedialog', async (req, res) => {
 
     const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
+    // Apply AppSheet LOOKUP preservation rule:
+    // OR(ISBLANK(LOOKUP([fkDigitalRecordingCode], DigitalRecordings, RecordingCode, PreservationStatus))=TRUE,
+    //    LOOKUP(...) = "Preserve")
+    // => dr.PreservationStatus IS NULL/empty OR dr.PreservationStatus = 'Preserve'
+    const staticWhere = `
+      (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR dr.PreservationStatus = 'Preserve'
+      )
+    `;
+
+    // Combine dynamic whereString with staticWhere
+    let combinedWhere = '';
+    const combinedParams = [...params];
+
+    if (whereString && whereString.trim() !== '') {
+      combinedWhere = `${whereString} AND (${staticWhere})`;
+    } else {
+      combinedWhere = `WHERE ${staticWhere}`;
+    }
+
     // COUNT must include same JOINs so WHERE can reference joined columns
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${combinedWhere}
     `;
-    const [[{ total }]] = await db.query(countQuery, params);
+    const [[{ total }]] = await db.query(countQuery, combinedParams);
     const totalPages = Math.ceil(total / limit);
 
     // Data query with joined fields and computed display fields
@@ -481,11 +503,11 @@ app.get('/api/newmedialog', async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${combinedWhere}
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+    const [results] = await db.query(dataQuery, [...combinedParams, limit, offset]);
 
     res.json({
       data: results,
@@ -503,6 +525,7 @@ app.get('/api/newmedialog', async (req, res) => {
 });
 
 
+// ...existing code...
 app.get('/api/newmedialog/formal', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -526,38 +549,78 @@ app.get('/api/newmedialog/formal', async (req, res) => {
     const { whereString, params } = buildWhereClause(
       req.query,
       [ 'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
-      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
-      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
-      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
-      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
-      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
-      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
-      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
-      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
-      'TopicGivenBy'], // global search fields
+        'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+        'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+        'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+        'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+        'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+        'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+        'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+        'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+        'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+        'TopicGivenBy'], // global search fields
       filterableColumns
     );
 
-  const dateColumns = [
-  "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
-];
+    const dateColumns = [
+      "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
+    ];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
 
-const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
+    // --- AppSheet rule translated to SQL:
+    // AND(
+    //   OR(
+    //     ISBLANK(LOOKUP([fkDigitalRecordingCode], DigitalRecordings, RecordingCode, PreservationStatus)) = TRUE,
+    //     LOOKUP(...) = "Preserve"
+    //   ),
+    //   OR([IsInformal] = "No", ISBLANK([IsInformal]) = TRUE)
+    // )
+    //
+    // Translated: (dr.PreservationStatus IS NULL/empty OR dr.PreservationStatus = 'Preserve')
+    // AND (nml.IsInformal = 'No' OR nml.IsInformal IS NULL OR TRIM(nml.IsInformal) = '')
+    const staticWhere = `
+      (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR dr.PreservationStatus = 'Preserve'
+      )
+      AND (
+        nml.IsInformal = 'No'
+        OR nml.IsInformal IS NULL
+        OR TRIM(nml.IsInformal) = ''
+      )
+    `;
+
+    // Combine dynamic whereString with staticWhere
+    let combinedWhere = '';
+    let combinedParams = [...params];
+
+    if (whereString && whereString.trim() !== '') {
+      // whereString already contains leading WHERE
+      combinedWhere = `${whereString} AND (${staticWhere})`;
+    } else {
+      combinedWhere = `WHERE ${staticWhere}`;
+    }
+
     // --- Count Query ---
-    const countQuery = `SELECT COUNT(*) as total FROM NewMediaLog ${whereString}`;
-    const [[{ total }]] = await db.query(countQuery, params);
+    const countQuery = `SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${combinedWhere}
+    `;
+    const [[{ total }]] = await db.query(countQuery, combinedParams);
     const totalPages = Math.ceil(total / limit);
 
     // --- Data Query ---
-     const dataQuery = `
+    const dataQuery = `
       SELECT
         nml.*,
         dr.RecordingName   AS Recordingname,
         dr.Masterquality   AS Masterquality,
         e.EventName        AS EventName,
         e.EventCode        AS EventCode,
-        e.Yr              AS Yr,
+        e.Yr               AS Yr,
         CONCAT(
           COALESCE(e.EventName, '' ),
           CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
@@ -567,17 +630,17 @@ const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateC
           COALESCE(nml.Detail, '' ),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-       ) AS DetailSub
+        ) AS DetailSub
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${combinedWhere}
       ${orderByString}
-     LIMIT ? OFFSET ?
+      LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+    const [results] = await db.query(dataQuery, [...combinedParams, limit, offset]);
 
     res.json({
       data: results,
@@ -589,10 +652,11 @@ const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateC
       }
     });
   } catch (err) {
-    console.error("❌ Database query error on /api/newmedialog:", err);
+    console.error("❌ Database query error on /api/newmedialog/formal:", err);
     res.status(500).json({ error: 'Database query failed' });
   }
 });
+// ...existing code...
 
 // server.js
 
