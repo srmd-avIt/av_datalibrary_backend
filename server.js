@@ -87,130 +87,280 @@ require('dotenv').config();
 
 
 // ✅ REPLACEMENT for your buildWhereClause function
+// ...existing code...
 const buildWhereClause = (queryParams, searchFields = [], allColumns = [], tableAliases = {}) => {
-    const allowedOperators = {
-        'contains': 'LIKE', 'not_contains': 'NOT LIKE', 'equals': '=', 'not_equals': '!=',
-        'starts_with': 'LIKE', 'ends_with': 'LIKE', 'in': 'IN', 'not_in': 'NOT IN',
-        'greater': '>', 'greater_equal': '>=', 'less': '<', 'less_equal': '<=',
-        'is_empty': 'IS_EMPTY', 'is_not_empty': 'IS_NOT_EMPTY', 'between': 'BETWEEN',
-    };
+  const allowedOperators = {
+    'contains': 'LIKE', 'not_contains': 'NOT LIKE', 'equals': '=', 'not_equals': '!=',
+    'starts_with': 'LIKE', 'ends_with': 'LIKE', 'in': 'IN', 'not_in': 'NOT IN',
+    'greater': '>', 'greater_equal': '>=', 'less': '<', 'less_equal': '<=',
+    'is_empty': 'IS_EMPTY', 'is_not_empty': 'IS_NOT_EMPTY', 'between': 'BETWEEN',
+  };
 
-    const { page, limit, sortBy, sortDirection, search, advanced_filters, ...filters } = queryParams;
-    const whereClauses = [];
-    let params = [];
+  const { page, limit, sortBy, sortDirection, search, advanced_filters, ...filters } = queryParams;
+  const whereClauses = [];
+  let params = [];
 
-    // --- Helper to get prefixed field name ---
-    const getPrefixedField = (field) => {
-        const alias = tableAliases[field];
-        // If an alias is defined for the field, use it. Otherwise, just escape the field.
-        return alias ? `${db.escapeId(alias)}.${db.escapeId(field)}` : db.escapeId(field);
-    };
+  // Helper to get prefixed field name (with alias if provided)
+  const getPrefixedField = (field) => {
+    const alias = tableAliases[field];
+    return alias ? `${db.escapeId(alias)}.${db.escapeId(field)}` : db.escapeId(field);
+  };
 
-    // --- 1. Handle Global Search ---
-    if (search && searchFields.length > 0) {
-        const searchConditions = searchFields
-            .map(field => `${getPrefixedField(field)} LIKE ?`)
-            .join(' OR ');
-        whereClauses.push(`(${searchConditions})`);
-        params.push(...searchFields.map(() => `%${search}%`));
+  // Helper for computed expressions
+  const computedExpr = (field) => {
+    // EventDisplay (EventName - EventCode)
+    if (field === 'EventDisplay' || field === 'EventName - EventCode' || field === 'EventName-EventCode') {
+      const en = getPrefixedField('EventName');
+      const ec = getPrefixedField('EventCode');
+      return `CONCAT(COALESCE(${en},''), CASE WHEN COALESCE(${en},'')<>'' AND COALESCE(${ec},'')<>'' THEN ' - ' ELSE '' END, COALESCE(${ec},''))`;
     }
+    // DetailSub (Detail - SubDetail)
+    if (field === 'DetailSub' || field === 'Detail - SubDetail' || field === 'Detail-SubDetail') {
+      const d = getPrefixedField('Detail');
+      const s = getPrefixedField('SubDetail');
+      return `CONCAT(COALESCE(${d},''), CASE WHEN COALESCE(${d},'')<>'' AND COALESCE(${s},'')<>'' THEN ' - ' ELSE '' END, COALESCE(${s},''))`;
+    }
+    return null;
+  };
 
-    // --- 2. Handle Simple Key-Value Filters ---
-    Object.keys(filters).forEach(key => {
-        const filterValue = queryParams[key];
-        const fieldName = key.replace(/_min|_max$/, '');
-        if (allColumns.length > 0 && !allColumns.includes(fieldName)) return;
-        
-        const prefixedField = getPrefixedField(fieldName);
-
-        if (key.endsWith('_min')) {
-            whereClauses.push(`${prefixedField} >= ?`);
-            params.push(filterValue);
-        } else if (key.endsWith('_max')) {
-            whereClauses.push(`${prefixedField} <= ?`);
-            params.push(filterValue);
-        } else if (typeof filterValue === 'string' && filterValue.trim() !== '' && filterValue !== 'all') {
-            whereClauses.push(`${prefixedField} = ?`);
-            params.push(filterValue);
-        }
+  // --- 1. Global search ---
+  if (search && searchFields.length > 0) {
+    const searchConditions = [];
+    searchFields.forEach(field => {
+      const expr = computedExpr(field);
+      if (expr) {
+        searchConditions.push(`${expr} LIKE ?`);
+        params.push(`%${search}%`);
+      } else {
+        searchConditions.push(`${getPrefixedField(field)} LIKE ?`);
+        params.push(`%${search}%`);
+      }
     });
+    if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
+  }
 
-    // --- 3. Handle Advanced Filters JSON ---
-    if (advanced_filters) {
-        try {
-            const filterGroups = JSON.parse(advanced_filters);
-            if (Array.isArray(filterGroups) && filterGroups.length > 0) {
-                const groupSqlParts = [];
-                filterGroups.forEach((group, groupIndex) => {
-                    if (!group.rules || group.rules.length === 0) return;
-                    const ruleSqlParts = [];
-                    const groupParams = [];
+  // --- 2. Simple key=value filters ---
+ Object.keys(filters).forEach(key => {
+   const rawValue = queryParams[key];
+   // support operator suffix: field__operator  (e.g. EventDisplay__contains=shri)
+   const [rawFieldName, opSuffix] = key.split('__');
+    const operatorKeyFromParam = (opSuffix || '').toLowerCase(); // may be '' => default behavior below
+   const fieldName = rawFieldName.replace(/_min|_max$/, '');
 
-                    group.rules.forEach((rule, ruleIndex) => {
-                        const operatorKey = String(rule.operator).toLowerCase();
-                        if (!rule.field || !operatorKey || !allColumns.includes(rule.field) || !allowedOperators[operatorKey]) return;
-                        
-                        const field = getPrefixedField(rule.field);
-                        const dbOperator = allowedOperators[operatorKey];
-                        let ruleClause = null;
-                        const ruleParams = [];
+    // allow computed fields even if not listed in allColumns
+    const isComputed = ['EventDisplay','EventName - EventCode','EventName-EventCode','DetailSub','Detail - SubDetail','Detail-SubDetail'].includes(fieldName);
+    if (!isComputed && allColumns.length > 0 && !allColumns.includes(fieldName)) return;
 
-                        switch (dbOperator) {
-                            case 'IS_EMPTY': ruleClause = `(${field} IS NULL OR ${field} = '')`; break;
-                            case 'IS_NOT_EMPTY': ruleClause = `(${field} IS NOT NULL AND ${field} <> '')`; break;
-                            case 'BETWEEN':
-                                if (Array.isArray(rule.value) && rule.value.length === 2) {
-                                    ruleParams.push(rule.value[0], rule.value[1]);
-                                    ruleClause = `${field} BETWEEN ? AND ?`;
-                                }
-                                break;
-                            case 'IN': case 'NOT IN':
-                                const inValues = Array.isArray(rule.value) ? rule.value : [rule.value];
-                                if (inValues.length > 0) {
-                                    ruleParams.push(...inValues);
-                                    ruleClause = `${field} ${dbOperator} (${inValues.map(() => '?').join(',')})`;
-                                }
-                                break;
-                            case 'LIKE': case 'NOT LIKE':
-                                let paramValue = `%${rule.value}%`;
-                                if (operatorKey === 'starts_with') paramValue = `${rule.value}%`;
-                                if (operatorKey === 'ends_with') paramValue = `%${rule.value}`;
-                                ruleParams.push(paramValue);
-                                ruleClause = `${field} ${dbOperator} ?`;
-                                break;
-                            default:
-                                ruleParams.push(rule.value);
-                                ruleClause = `${field} ${dbOperator} ?`;
-                                break;
-                        }
+   const comp = computedExpr(fieldName);
 
-                        if (ruleClause) {
-                            if (ruleIndex > 0) ruleSqlParts.push(rule.logic || 'AND');
-                            ruleSqlParts.push(ruleClause);
-                            groupParams.push(...ruleParams);
-                        }
-                    });
-
-                    if (ruleSqlParts.length > 0) {
-                        const groupClause = `(${ruleSqlParts.join(' ')})`;
-                        if (groupIndex > 0) groupSqlParts.push(group.logic || 'OR');
-                        groupSqlParts.push(groupClause);
-                        params.push(...groupParams);
-                    }
-                });
-
-                if (groupSqlParts.length > 0) whereClauses.push(`(${groupSqlParts.join(' ')})`);
-            }
-        } catch (e) {
-            console.error("❌ Failed to parse advanced_filters:", e);
+    // helper to push operator -> SQL fragment for computed expression
+    const pushComputedClause = (opKey, val) => {
+      const dbOp = allowedOperators[opKey] || allowedOperators['contains'];
+      switch (dbOp) {
+        case 'IS_EMPTY':
+          whereClauses.push(`(${comp} IS NULL OR ${comp} = '')`);
+          break;
+        case 'IS_NOT_EMPTY':
+          whereClauses.push(`(${comp} IS NOT NULL AND ${comp} <> '')`);
+          break;
+        case 'IN':
+        case 'NOT IN': {
+          const arr = Array.isArray(val) ? val : String(val).split(',').map(v => v.trim()).filter(Boolean);
+          if (arr.length === 0) return;
+          whereClauses.push(`${comp} ${dbOp} (${arr.map(() => '?').join(',')})`);
+          params.push(...arr);
+          break;
         }
+        case 'BETWEEN':
+          if (Array.isArray(val) && val.length === 2) {
+            whereClauses.push(`${comp} BETWEEN ? AND ?`);
+            params.push(val[0], val[1]);
+          }
+          break;
+        case 'LIKE':
+        case 'NOT LIKE': {
+// interpret common operatorKey synonyms
+          if (operatorKeyFromParam === 'starts_with') {
+            whereClauses.push(`${comp} ${dbOp} ?`);
+            params.push(`${val}%`);
+          } else if (operatorKeyFromParam === 'ends_with') {
+            whereClauses.push(`${comp} ${dbOp} ?`);
+            params.push(`%${val}`);
+          } else if (operatorKeyFromParam === 'equals') {
+            whereClauses.push(`${comp} = ?`);
+            params.push(val);
+          } else if (operatorKeyFromParam === 'not_equals') {
+            whereClauses.push(`${comp} != ?`);
+            params.push(val);
+} else {
+            // default contains
+            whereClauses.push(`${comp} ${dbOp} ?`);
+            params.push(`%${val}%`);
+          }
+          break;
+        }
+        default:
+          // numeric or lexicographic compare (>, <, >=, <=, =, !=)
+          whereClauses.push(`${comp} ${dbOp} ?`);
+          params.push(val);
+          break;
+      }
+    };
+
+    // If computed expression and an operator suffix was provided, respect it.
+    if (comp && operatorKeyFromParam) {
+      pushComputedClause(operatorKeyFromParam, rawValue);
+      return;
     }
 
-    return {
-        whereString: whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '',
-        params
-    };
+    // If computed expression but no explicit operator provided, default to contains (LIKE)
+    if (comp) {
+      if (typeof rawValue === 'string' && rawValue.trim() !== '' && rawValue !== 'all') {
+        whereClauses.push(`${comp} LIKE ?`);
+        params.push(`%${rawValue}%`);
+      }
+      return;
+    }
+
+    // Non-computed fields: support _min/_max and operator suffixes too
+    const prefixedField = getPrefixedField(fieldName);
+
+    if (key.endsWith('_min')) {
+      whereClauses.push(`${prefixedField} >= ?`);
+      params.push(rawValue);
+    } else if (key.endsWith('_max')) {
+      whereClauses.push(`${prefixedField} <= ?`);
+      params.push(rawValue);
+    } else if (operatorKeyFromParam) {
+      // handle field__operator for regular fields
+      const dbOp = allowedOperators[operatorKeyFromParam];
+      if (!dbOp) return;
+      switch (dbOp) {
+        case 'IS_EMPTY':
+          whereClauses.push(`(${prefixedField} IS NULL OR ${prefixedField} = '')`);
+          break;
+       case 'IS_NOT_EMPTY':
+         whereClauses.push(`(${prefixedField} IS NOT NULL AND ${prefixedField} <> '')`);
+          break;
+        case 'IN':
+        case 'NOT IN': {
+          const arr = Array.isArray(rawValue) ? rawValue : String(rawValue).split(',').map(v => v.trim()).filter(Boolean);
+          if (arr.length === 0) return;
+          whereClauses.push(`${prefixedField} ${dbOp} (${arr.map(() => '?').join(',')})`);
+          params.push(...arr);
+          break;
+        }
+        case 'BETWEEN':
+          if (Array.isArray(rawValue) && rawValue.length === 2) {
+            whereClauses.push(`${prefixedField} BETWEEN ? AND ?`);
+            params.push(rawValue[0], rawValue[1]);
+          }
+          break;
+        case 'LIKE':
+        case 'NOT LIKE':
+          if (operatorKeyFromParam === 'starts_with') {
+            whereClauses.push(`${prefixedField} ${dbOp} ?`);
+            params.push(`${rawValue}%`);
+         } else if (operatorKeyFromParam === 'ends_with') {
+            whereClauses.push(`${prefixedField} ${dbOp} ?`);
+            params.push(`%${rawValue}`);
+          } else {
+            whereClauses.push(`${prefixedField} ${dbOp} ?`);
+            params.push(`%${rawValue}%`);
+          }
+          break;
+        default:
+          whereClauses.push(`${prefixedField} ${dbOp} ?`);
+          params.push(rawValue);
+          break;
+      }
+    } else if (typeof rawValue === 'string' && rawValue.trim() !== '' && rawValue !== 'all') {
+      // default equality for simple non-computed filters
+      whereClauses.push(`${prefixedField} = ?`);
+      params.push(rawValue);
+    }
+  });
+
+  // --- 3. Advanced filters (JSON) ---
+  if (advanced_filters) {
+    try {
+      const filterGroups = JSON.parse(advanced_filters);
+      if (Array.isArray(filterGroups) && filterGroups.length > 0) {
+        const groupSqlParts = [];
+        filterGroups.forEach((group, groupIndex) => {
+          if (!group.rules || group.rules.length === 0) return;
+          const ruleSqlParts = [];
+          const groupParams = [];
+
+          group.rules.forEach((rule, ruleIndex) => {
+            const operatorKey = String(rule.operator).toLowerCase();
+            if (!rule.field || !operatorKey || !allowedOperators[operatorKey]) return;
+            // allow computed fields even if not in allColumns
+            if (allColumns.length > 0 && !allColumns.includes(rule.field) && !computedExpr(rule.field)) return;
+
+            const comp = computedExpr(rule.field);
+            const dbField = comp ? comp : getPrefixedField(rule.field);
+            const dbOperator = allowedOperators[operatorKey];
+            let ruleClause = null;
+            const ruleParams = [];
+
+            switch (dbOperator) {
+              case 'IS_EMPTY': ruleClause = `(${dbField} IS NULL OR ${dbField} = '')`; break;
+              case 'IS_NOT_EMPTY': ruleClause = `(${dbField} IS NOT NULL AND ${dbField} <> '')`; break;
+              case 'BETWEEN':
+                if (Array.isArray(rule.value) && rule.value.length === 2) {
+                  ruleParams.push(rule.value[0], rule.value[1]);
+                  ruleClause = `${dbField} BETWEEN ? AND ?`;
+                }
+                break;
+              case 'IN': case 'NOT IN':
+                const inValues = Array.isArray(rule.value) ? rule.value : [rule.value];
+                if (inValues.length > 0) {
+                  ruleParams.push(...inValues);
+                  ruleClause = `${dbField} ${dbOperator} (${inValues.map(() => '?').join(',')})`;
+                }
+                break;
+              case 'LIKE': case 'NOT LIKE':
+                let paramValue = `%${rule.value}%`;
+                if (operatorKey === 'starts_with') paramValue = `${rule.value}%`;
+                if (operatorKey === 'ends_with') paramValue = `%${rule.value}`;
+                ruleParams.push(paramValue);
+                ruleClause = `${dbField} ${dbOperator} ?`;
+                break;
+              default:
+                ruleParams.push(rule.value);
+                ruleClause = `${dbField} ${dbOperator} ?`;
+                break;
+            }
+
+            if (ruleClause) {
+              if (ruleIndex > 0) ruleSqlParts.push(rule.logic || 'AND');
+              ruleSqlParts.push(ruleClause);
+              groupParams.push(...ruleParams);
+            }
+          });
+
+          if (ruleSqlParts.length > 0) {
+            const groupClause = `(${ruleSqlParts.join(' ')})`;
+            if (groupIndex > 0) groupSqlParts.push(group.logic || 'OR');
+            groupSqlParts.push(groupClause);
+            params.push(...groupParams);
+          }
+        });
+
+        if (groupSqlParts.length > 0) whereClauses.push(`(${groupSqlParts.join(' ')})`);
+      }
+    } catch (e) {
+      console.error("❌ Failed to parse advanced_filters:", e);
+    }
+  }
+
+  return {
+    whereString: whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '',
+    params
+  };
 };
+// ...existing code...
 
 
 // ✅ REPLACEMENT for your buildOrderByClause function
@@ -417,18 +567,20 @@ app.get('/api/newmedialog', async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr',
-      'RecordingName','RecordingCode','PreservationStatus'
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
     ];
 
     // mapping of column -> table alias used in SQL joins
-    const aliases = {
+        const aliases = {
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
       RecordingName: 'dr',
       RecordingCode: 'dr',
       PreservationStatus: 'dr',
-      LastModifiedTimestamp: 'nml'
+      LastModifiedTimestamp: 'nml',
+      IsInformal: 'nml',
+      IsAudioRecorded: 'nml'
     };
 
     // global search fields (keeps UI quick-search useful)
@@ -446,37 +598,15 @@ app.get('/api/newmedialog', async (req, res) => {
 
     const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
-    // Apply AppSheet LOOKUP preservation rule:
-    // OR(ISBLANK(LOOKUP([fkDigitalRecordingCode], DigitalRecordings, RecordingCode, PreservationStatus))=TRUE,
-    //    LOOKUP(...) = "Preserve")
-    // => dr.PreservationStatus IS NULL/empty OR dr.PreservationStatus = 'Preserve'
-    const staticWhere = `
-      (
-        dr.PreservationStatus IS NULL
-        OR TRIM(dr.PreservationStatus) = ''
-        OR dr.PreservationStatus = 'Preserve'
-      )
-    `;
-
-    // Combine dynamic whereString with staticWhere
-    let combinedWhere = '';
-    const combinedParams = [...params];
-
-    if (whereString && whereString.trim() !== '') {
-      combinedWhere = `${whereString} AND (${staticWhere})`;
-    } else {
-      combinedWhere = `WHERE ${staticWhere}`;
-    }
-
     // COUNT must include same JOINs so WHERE can reference joined columns
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
-      ${combinedWhere}
+      ${whereString}
     `;
-    const [[{ total }]] = await db.query(countQuery, combinedParams);
+    const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
 
     // Data query with joined fields and computed display fields
@@ -503,11 +633,11 @@ app.get('/api/newmedialog', async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
-      ${combinedWhere}
+      ${whereString}
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...combinedParams, limit, offset]);
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
 
     res.json({
       data: results,
@@ -533,7 +663,7 @@ app.get('/api/newmedialog/formal', async (req, res) => {
     const offset = (page - 1) * limit;
 
     const filterableColumns = [
-      'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
       'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
       'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
       'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
@@ -543,10 +673,26 @@ app.get('/api/newmedialog/formal', async (req, res) => {
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
-      'TopicGivenBy'
+      'TopicGivenBy',
+      // joined table columns (available for filtering/search)
+      'EventName','EventCode','Yr',
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
     ];
 
-    const { whereString, params } = buildWhereClause(
+     // avoid ambiguous column names when WHERE references joined tables
+   const aliases = {
+     IsInformal: 'nml',
+     IsAudioRecorded: 'nml',
+    LastModifiedTimestamp: 'nml',
+     PreservationStatus: 'dr',
+     RecordingCode: 'dr',
+     RecordingName: 'dr',
+     EventName: 'e',
+    EventCode: 'e',
+     Yr: 'e'
+   };
+
+     const { whereString, params } = buildWhereClause(
       req.query,
       [ 'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
         'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
@@ -559,13 +705,14 @@ app.get('/api/newmedialog/formal', async (req, res) => {
         'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
         'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
         'TopicGivenBy'], // global search fields
-      filterableColumns
+      filterableColumns,
+      aliases
     );
 
     const dateColumns = [
       "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
     ];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
+      const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns);
 
     // --- AppSheet rule translated to SQL:
     // AND(
@@ -689,6 +836,7 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
 
     const aliases = {
       IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
       PreservationStatus: 'dr',
       RecordingCode: 'dr',
       RecordingName: 'dr',
@@ -1019,11 +1167,12 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
       'EventName','EventCode','Yr',
       // UI computed
-      'EventDisplay','EventName-EventCode'
+      'EventName - EventCode'
     ];
 
     const aliases = {
       IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
       PreservationStatus: 'dr',
       RecordingCode: 'dr',
       RecordingName: 'dr',
