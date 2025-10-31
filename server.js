@@ -364,24 +364,47 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
 
 
 // ✅ REPLACEMENT for your buildOrderByClause function
-const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = []) => {
+// ✅ REPLACEMENT for your buildOrderByClause function
+const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = [], numericColumns = []) => {
   let { sortBy, sortDirection } = queryParams;
-  const direction = (String(sortDirection).toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
 
-  if (sortBy && allowedColumns.includes(sortBy)) {
-    const alias = tableAliases[sortBy];
-    const prefixedSortBy = alias
-      ? `${db.escapeId(alias)}.${db.escapeId(sortBy)}`
-      : db.escapeId(sortBy);
+  if (!sortBy || sortBy === 'none') {
+    return '';
+  }
 
-    // If this is a date column stored as string, use STR_TO_DATE
-    if (dateColumns.includes(sortBy)) {
-      // Adjust the format string if your date format is different!
-      return `ORDER BY STR_TO_DATE(${prefixedSortBy}, '%d-%m-%Y') ${direction}`;
+  const sortFields = sortBy.split(',').map(field => field.trim());
+  // --- MODIFIED: Handle per-field sort directions ---
+  const sortDirections = (sortDirection || '').split(',').map(dir => (String(dir).toUpperCase() === 'DESC' ? 'DESC' : 'ASC'));
+
+  const orderByParts = sortFields.map((field, index) => {
+    if (!allowedColumns.includes(field)) {
+      console.warn(`⚠️ Sort field '${field}' not in allowed list, skipping.`);
+      return null;
+    }
+    
+    // Use the specific direction for this field, or fallback to the first direction
+    const direction = sortDirections[index] || sortDirections[0] || 'ASC';
+
+    const alias = tableAliases[field];
+    const prefixedField = alias
+      ? `${db.escapeId(alias)}.${db.escapeId(field)}`
+      : db.escapeId(field);
+
+    let sortExpression = prefixedField;
+
+    if (dateColumns.includes(field)) {
+      sortExpression = `STR_TO_DATE(${prefixedField}, '%d-%m-%Y')`;
+    } else if (numericColumns.includes(field)) {
+      sortExpression = `CAST(${prefixedField} AS UNSIGNED)`;
     }
 
-    // Otherwise, normal sort
-    return `ORDER BY ${prefixedSortBy} ${direction}`;
+    // Append the direction to each field
+    return `${sortExpression} ${direction}`;
+  }).filter(Boolean);
+
+  if (orderByParts.length > 0) {
+    // The direction is now part of each part, so we just join them
+    return `ORDER BY ${orderByParts.join(', ')}`;
   }
 
   return '';
@@ -421,7 +444,8 @@ app.get('/api/events', async (req, res) => {
       filterableColumns
     );
 const dateColumns = ['SubmittedDate', 'FromDate', 'ToDate', 'LastModifiedTimestamp', 'NewEventFrom', 'NewEventTo'];
-const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns);
+const numericColumns = ['EventID', 'PravachanCount', 'UdhgoshCount', 'PaglaCount', 'PratisthaCount'];
+const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns, numericColumns);
 
     // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM Events ${whereString}`;
@@ -580,13 +604,26 @@ app.get('/api/newmedialog', async (req, res) => {
       PreservationStatus: 'dr',
       LastModifiedTimestamp: 'nml',
       IsInformal: 'nml',
-      IsAudioRecorded: 'nml'
+      IsAudioRecorded: 'nml',
+      LastModifiedBy: 'nml'
     };
 
     // global search fields (keeps UI quick-search useful)
     const searchFields = [
-      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode'
+     'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicGivenBy',
+      // joined table columns (available for filtering/search)
+      'EventName','EventCode','Yr',
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
     ];
 
     // Build WHERE using correct argument order: (queryParams, searchFields, allColumns, tableAliases)
@@ -595,8 +632,9 @@ app.get('/api/newmedialog', async (req, res) => {
     const dateColumns = [
       "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
     ];
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
 
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
     // COUNT must include same JOINs so WHERE can reference joined columns
     const countQuery = `
@@ -712,7 +750,8 @@ app.get('/api/newmedialog/formal', async (req, res) => {
     const dateColumns = [
       "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
     ];
-      const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns);
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+      const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns);
 
     // --- AppSheet rule translated to SQL:
     // AND(
@@ -870,7 +909,8 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
     const dateColumns = [
       "LastModifiedTimestamp", "ContentFrom", "ContentTo", "SatsangStart", "SatsangEnd"
     ];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
     const staticWhere = `
       nml.\`Segment Category\` NOT IN (
@@ -1033,7 +1073,8 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
     const dateColumns = [
       "LastModifiedTimestamp", "ContentFrom", "ContentTo", "SatsangStart", "SatsangEnd"
     ];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
     const staticWhere = `
       nml.\`Segment Category\` IN (
@@ -1205,7 +1246,8 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     }
 
     const dateColumns = ["LastModifiedTimestamp", "ContentFrom", "ContentTo", "SatsangStart", "SatsangEnd"];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns) || 'ORDER BY nml.MLUniqueID DESC';
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
     const staticWhere = `
       nml.\`Segment Category\` IN (
@@ -1580,7 +1622,8 @@ app.get('/api/digitalrecording', async (req, res) => {
     );
 
     const dateColumns = ['SubmittedDate', 'LastModifiedTimestamp', 'PresStatGuidDt'];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns);
+    const numericColumns = ['NoOfFiles', 'FilesizeInBytes', 'BitRate', 'AudioBitrate'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns);
 
     // --- Count Query ---
     const countQuery = `
@@ -1815,7 +1858,9 @@ app.get('/api/auxfiles', async (req, res) => {
       filterableColumns
     );
 
-    const orderByString = buildOrderByClause(req.query, filterableColumns);
+    const dateColumns = ['CreatedOn', 'ModifiedOn'];
+    const numericColumns = ['new_auxid', 'fkMLID'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateColumns, numericColumns);
 
     // --- Count Query ---
     const countQuery = `SELECT COUNT(*) as total FROM AuxFiles ${whereString}`;
