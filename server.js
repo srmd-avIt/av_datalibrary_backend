@@ -844,6 +844,224 @@ app.get('/api/newmedialog/formal', async (req, res) => {
 });
 // ...existing code...
 
+
+app.get('/api/newmedialog/formal/export', async (req, res) => {
+  try {
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicGivenBy','EventName','EventCode','Yr','RecordingName','RecordingCode','PreservationStatus','Masterquality'
+    ];
+
+    const aliases = {
+      IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
+      LastModifiedTimestamp: 'nml',
+      PreservationStatus: 'dr',
+      RecordingCode: 'dr',
+      RecordingName: 'dr',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e'
+    };
+
+    const searchFields = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicGivenBy'
+    ];
+
+    const { whereString, params } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
+
+    // --- static filter (formal only)
+    const staticWhere = `
+      (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR dr.PreservationStatus = 'Preserve'
+      )
+      AND (
+        nml.IsInformal = 'No'
+        OR nml.IsInformal IS NULL
+        OR TRIM(nml.IsInformal) = ''
+      )
+    `;
+
+    // Combine filters
+    let combinedWhere = '';
+    const combinedParams = [...params];
+    if (whereString && whereString.trim() !== '') {
+      combinedWhere = `${whereString} AND (${staticWhere})`;
+    } else {
+      combinedWhere = `WHERE ${staticWhere}`;
+    }
+
+    // --- export query ---
+    const exportQuery = `
+      SELECT
+        nml.*,
+        dr.RecordingName   AS Recordingname,
+        dr.Masterquality   AS Masterquality,
+        e.EventName        AS EventName,
+        e.EventCode        AS EventCode,
+        e.Yr               AS Yr,
+        CONCAT(
+          COALESCE(e.EventName, '' ),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, '' ),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e
+        ON dr.fkEventCode = e.EventCode
+      ${combinedWhere}
+      ORDER BY nml.MLUniqueID DESC
+    `;
+
+    const [results] = await db.query(exportQuery, combinedParams);
+
+    if (!results.length) {
+      return res.status(404).send('No records found for export.');
+    }
+
+    // --- CSV build ---
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = value === null || value === undefined ? '' : String(value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="newmedialog_formal.csv"');
+    res.status(200).send(csvContent);
+
+  } catch (err) {
+    console.error("❌ Export Error in /api/newmedialog/export-formal:", err);
+    res.status(500).json({ error: 'CSV export failed', details: err.message });
+  }
+});
+
+
+app.put('/api/newmedialog/formal/:MLUniqueID', async (req, res) => {
+  const { MLUniqueID } = req.params;
+
+  const {
+    fkDigitalRecordingCode,
+    ContentFrom,
+    ContentTo,
+    Detail,
+    SubDetail,
+   
+    TopicSource,
+    EditingStatus,
+    FootageType,
+    Language,
+    SpeakerSinger,
+    Venue,
+    Synopsis,
+    HasSubtitle,
+    SubTitlesLanguage,
+    Remarks,
+    LastModifiedBy
+  } = req.body;
+const SegmentCategory = req.body['Segment Category'];
+  if (!MLUniqueID) {
+    return res.status(400).json({ error: "MLUniqueID is required." });
+  }
+
+  try {
+    const updateQuery = `
+      UPDATE NewMediaLog
+      SET
+        fkDigitalRecordingCode = ?,
+        ContentFrom = ?,
+        ContentTo = ?,
+        Detail = ?,
+        SubDetail = ?,
+        \`Segment Category\` = ?,
+        TopicSource = ?,
+        EditingStatus = ?,
+        FootageType = ?,
+        Language = ?,
+        SpeakerSinger = ?,
+        Venue = ?,
+        Synopsis = ?,
+        HasSubtitle = ?,
+        SubTitlesLanguage = ?,
+        Remarks = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE MLUniqueID = ?
+        AND (
+          IsInformal = 'No'
+          OR IsInformal IS NULL
+          OR TRIM(IsInformal) = ''
+        )
+    `;
+
+    const [result] = await db.query(updateQuery, [
+      fkDigitalRecordingCode || null,
+      ContentFrom || null,
+      ContentTo || null,
+      Detail || null,
+      SubDetail || null,
+      SegmentCategory || null,
+      TopicSource || null,
+      EditingStatus || null,
+      FootageType || null,
+      Language || null,
+      SpeakerSinger || null,
+      Venue || null,
+      Synopsis || null,
+      HasSubtitle || null,
+      SubTitlesLanguage || null,
+      Remarks || null,
+      LastModifiedBy || '',
+      MLUniqueID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: `No formal record found for MLUniqueID ${MLUniqueID}.`
+      });
+    }
+
+    res.status(200).json({
+      message: "Record updated successfully for Formal view."
+    });
+  } catch (err) {
+    console.error("❌ Database error on /api/newmedialog/formal PUT:", err);
+    res.status(500).json({ error: "Failed to update record." });
+  }
+});
+
 // server.js
 
 // ...existing code...
@@ -1008,7 +1226,231 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
 // ...existing code...
 
 
+app.get('/api/newmedialog/all-except-satsang/export', async (req, res) => {
+  try {
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode',
+      'EventName','EventCode','Yr'
+    ];
 
+    const aliases = {
+      IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
+      PreservationStatus: 'dr',
+      RecordingCode: 'dr',
+      RecordingName: 'dr',
+      fkEventCode: 'dr',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e',
+      LastModifiedTimestamp: 'nml'
+    };
+
+    const searchFields = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'EventName','EventCode','RecordingName','RecordingCode'
+    ];
+
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(
+      req.query, searchFields, filterableColumns, aliases
+    );
+
+    // extra filters for EventDisplay (EventName - EventCode)
+    let extraWhere = '';
+    const extraParams = [];
+    const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
+    if (displayValue && String(displayValue).trim() !== '') {
+      const likeVal = `%${displayValue}%`;
+      extraWhere = `(${db.escapeId('e')}.EventName LIKE ? OR ${db.escapeId('e')}.EventCode LIKE ? OR CONCAT(${db.escapeId('e')}.EventName, ' - ', ${db.escapeId('e')}.EventCode) LIKE ?)`;
+      extraParams.push(likeVal, likeVal, likeVal);
+    }
+
+    const staticWhere = `
+      nml.\`Segment Category\` NOT IN (
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision',
+        'Satsang', 'Informal Satsang', 'SU - Extracted'
+      )
+      AND (
+        nml.\`IsInformal\` IS NULL
+        OR TRIM(nml.\`IsInformal\`) = ''
+        OR UPPER(TRIM(nml.\`IsInformal\`)) = 'NO'
+      )
+      AND (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+      )
+    `;
+
+    let finalWhere = '';
+    const finalParams = [];
+
+    if (dynamicWhere) {
+      finalWhere = `${dynamicWhere} AND (${staticWhere})`;
+      finalParams.push(...dynamicParams);
+    } else {
+      finalWhere = `WHERE ${staticWhere}`;
+    }
+
+    if (extraWhere) {
+      finalWhere = `${finalWhere} AND (${extraWhere})`;
+      finalParams.push(...extraParams);
+    }
+
+    const exportQuery = `
+      SELECT 
+        nml.*,
+        dr.PreservationStatus,
+        dr.RecordingCode,
+        dr.RecordingName AS Recordingname,
+        dr.Masterquality AS Masterquality,
+        dr.fkEventCode,
+        e.EventName,
+        e.EventCode,
+        e.Yr AS Yr,
+        CONCAT(
+          COALESCE(e.EventName, '' ),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, '' ),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr 
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e
+        ON dr.fkEventCode = e.EventCode
+      ${finalWhere}
+      ORDER BY nml.MLUniqueID DESC
+    `;
+
+    const [results] = await db.query(exportQuery, finalParams);
+
+    if (results.length === 0) {
+      return res.status(404).send("No records found for export.");
+    }
+
+    // build CSV
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="newmedialog_all_except_satsang.csv"');
+    res.status(200).send(csvContent);
+
+  } catch (err) {
+    console.error("❌ Export Error in /api/newmedialog/export-all-except-satsang:", err);
+    res.status(500).json({ error: 'CSV export failed', details: err.message });
+  }
+});
+
+app.put('/api/newmedialog/all-except-satsang/:MLUniqueID', async (req, res) => {
+  const { MLUniqueID } = req.params;
+
+  const {
+    fkDigitalRecordingCode,
+    ContentFrom,
+    ContentTo,
+    Detail,
+    SubDetail,
+    TopicSource,
+    EditingStatus,
+    FootageType,
+    Language,
+    SpeakerSinger,
+    Venue,
+    Synopsis,
+    HasSubtitle,
+    SubTitlesLanguage,
+    Remarks,
+    LastModifiedBy
+  } = req.body;
+
+const SegmentCategory = req.body['Segment Category'];
+
+  if (!MLUniqueID) {
+    return res.status(400).json({ error: "MLUniqueID is required." });
+  }
+
+  try {
+    const updateQuery = `
+      UPDATE NewMediaLog
+      SET
+        fkDigitalRecordingCode = ?,
+        ContentFrom = ?,
+        ContentTo = ?,
+        Detail = ?,
+        SubDetail = ?,
+        \`Segment Category\` = ?,
+        TopicSource = ?,
+        EditingStatus = ?,
+        FootageType = ?,
+        Language = ?,
+        SpeakerSinger = ?,
+        Venue = ?,
+        Synopsis = ?,
+        HasSubtitle = ?,
+        SubTitlesLanguage = ?,
+        Remarks = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE MLUniqueID = ?
+    `;
+
+    const [result] = await db.query(updateQuery, [
+      fkDigitalRecordingCode || null,
+      ContentFrom || null,
+      ContentTo || null,
+      Detail || null,
+      SubDetail || null,
+      SegmentCategory || null,
+      TopicSource || null,
+      EditingStatus || null,
+      FootageType || null,
+      Language || null,
+      SpeakerSinger || null,
+      Venue || null,
+      Synopsis || null,
+      HasSubtitle || null,
+      SubTitlesLanguage || null,
+      Remarks || null,
+      LastModifiedBy || '',
+      MLUniqueID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Record with MLUniqueID ${MLUniqueID} not found.` });
+    }
+
+    res.status(200).json({
+      message: "Record updated successfully for All Except Satsang view."
+    });
+  } catch (err) {
+    console.error("❌ Database error on /api/newmedialog/all-except-satsang PUT:", err);
+    res.status(500).json({ error: "Failed to update record." });
+  }
+});
 
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 // ...existing code...
@@ -1126,7 +1568,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
         nml.ContentFrom,
         nml.Detail,
         nml.SubDetail,
-        nml.\`Segment Category\` AS SegmentCategory,
+        nml.\`Segment Category\` ,
         nml.TopicSource,
         nml.SubDuration,
         nml.Language,
@@ -1181,6 +1623,243 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
 });
 // ...existing code...
 
+app.get('/api/newmedialog/satsang-extracted-clips/export', async (req, res) => {
+  try {
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
+      // joined table columns
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode',
+      'EventName','EventCode','Yr','EventDisplay','EventName-EventCode'
+    ];
+
+    const aliases = {
+      IsInformal: 'nml',
+      PreservationStatus: 'dr',
+      RecordingCode: 'dr',
+      RecordingName: 'dr',
+      fkEventCode: 'dr',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e',
+      LastModifiedTimestamp: 'nml'
+    };
+
+    const searchFields = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'EventName','EventCode','RecordingName','RecordingCode'
+    ];
+
+    // Build dynamic WHERE
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(
+      req.query,
+      searchFields,
+      filterableColumns,
+      aliases
+    );
+
+    // Handle EventDisplay / EventName-EventCode filters
+    let extraWhere = '';
+    const extraParams = [];
+    const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
+    if (displayValue && String(displayValue).trim() !== '') {
+      const likeVal = `%${displayValue}%`;
+      extraWhere = `(${db.escapeId('e')}.${db.escapeId('EventName')} LIKE ? 
+        OR ${db.escapeId('e')}.${db.escapeId('EventCode')} LIKE ? 
+        OR CONCAT(${db.escapeId('e')}.${db.escapeId('EventName')}, ' - ', ${db.escapeId('e')}.${db.escapeId('EventCode')}) LIKE ?)`;
+      extraParams.push(likeVal, likeVal, likeVal);
+    }
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN ('Product/Webseries','SU - Extracted','Satsang Clips')
+      AND (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+      )
+    `;
+
+    // Combine all WHEREs
+    let finalWhere = '';
+    const finalParams = [];
+
+    if (dynamicWhere) {
+      finalWhere = `${dynamicWhere} AND (${staticWhere})`;
+      finalParams.push(...dynamicParams);
+    } else {
+      finalWhere = `WHERE ${staticWhere}`;
+    }
+
+    if (extraWhere) {
+      finalWhere = `${finalWhere} AND (${extraWhere})`;
+      finalParams.push(...extraParams);
+    }
+
+    const orderBy = 'ORDER BY nml.MLUniqueID DESC';
+
+    // Export all matching rows
+    const exportQuery = `
+      SELECT
+        nml.MLUniqueID,
+        nml.FootageSrNo,
+        nml.fkDigitalRecordingCode,
+        nml.ContentFrom,
+        nml.Detail,
+        nml.SubDetail,
+        nml.\`Segment Category\`,
+        nml.TopicSource,
+        nml.SubDuration,
+        nml.Language,
+        nml.HasSubtitle,
+        nml.SubTitlesLanguage,
+        nml.Synopsis,
+        nml.SatsangStart,
+        nml.SatsangEnd,
+        nml.AudioMP3DRCode,
+        nml.fkCity,
+        nml.LastModifiedTimestamp,
+        nml.LastModifiedBy,
+        dr.RecordingName AS Recordingname,
+        dr.Masterquality AS Masterquality,
+        e.EventName,
+        e.EventCode,
+        e.Yr AS Yr,
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${finalWhere}
+      ${orderBy}
+    `;
+
+    const [results] = await db.query(exportQuery, finalParams);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    // Generate CSV
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    // Send file
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="satsang-extracted-clips_export.csv"'
+    );
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error("❌ API Error for /api/newmedialog/satsang-extracted-clips/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/newmedialog/satsang-extracted-clips/:MLUniqueID', async (req, res) => {
+  const { MLUniqueID } = req.params;
+
+  const {
+    fkDigitalRecordingCode,
+    ContentFrom,
+    Detail,
+    SubDetail,
+    
+    TopicSource,
+    SubDuration,
+    Language,
+    HasSubtitle,
+    SubTitlesLanguage,
+    Synopsis,
+    SatsangStart,
+    SatsangEnd,
+    AudioMP3DRCode,
+    fkCity,
+    LastModifiedBy
+  } = req.body;
+const SegmentCategory = req.body['Segment Category'];
+  if (!MLUniqueID) {
+    return res.status(400).json({ error: "MLUniqueID is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewMediaLog
+      SET
+        fkDigitalRecordingCode = ?,
+        ContentFrom = ?,
+        Detail = ?,
+        SubDetail = ?,
+        \`Segment Category\` = ?,
+        TopicSource = ?,
+        SubDuration = ?,
+        Language = ?,
+        HasSubtitle = ?,
+        SubTitlesLanguage = ?,
+        Synopsis = ?,
+        SatsangStart = ?,
+        SatsangEnd = ?,
+        AudioMP3DRCode = ?,
+        fkCity = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE MLUniqueID = ?
+    `;
+
+    const [result] = await db.query(query, [
+      fkDigitalRecordingCode || null,
+      ContentFrom || null,
+      Detail || null,
+      SubDetail || null,
+      SegmentCategory || null,
+      TopicSource || null,
+      SubDuration || null,
+      Language || null,
+      HasSubtitle || null,
+      SubTitlesLanguage || null,
+      Synopsis || null,
+      SatsangStart || null,
+      SatsangEnd || null,
+      AudioMP3DRCode || null,
+      fkCity || null,
+      LastModifiedBy || '',
+      MLUniqueID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Record with MLUniqueID ${MLUniqueID} not found.` });
+    }
+
+    res.status(200).json({ message: "Satsang Extracted Clip record updated successfully." });
+  } catch (err) {
+    console.error("❌ Database error on /api/newmedialog/satsang-extracted-clips PUT:", err);
+    res.status(500).json({ error: "Failed to update Satsang Extracted Clip record." });
+  }
+});
 
 
 
@@ -1229,7 +1908,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     // global/search fields
     const searchFields = [
       'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode'
+      'EventName','EventCode','RecordingName','RecordingCode', 'fkEventCategory'
     ];
 
     // Build dynamic WHERE using correct arg order and aliases
@@ -1299,12 +1978,12 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         nml.ContentTo,
         nml.Detail,
         nml.SubDetail,
-        nml.TopicSource,
-        nml.NumberSource,
+        nml.Topic,
+        nml.Number,
         nml.fkGranth AS Granths,
         nml.Language,
         nml.SubDuration,
-        nml.\`Segment Category\` AS SegmentCategory,
+        nml.\`Segment Category\`,
         nml.FootageType,
         nml.fkOccasion,
         nml.SpeakerSinger,
@@ -1368,8 +2047,125 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
 // ...existing code...
 // ...existing code...
 
+// --- EXPORT for Satsang Category ---
+app.get('/api/newmedialog/satsang-category/export', async (req, res) => {
+  try {
+    // Using the simpler export logic as requested
+    const { whereString, params } = buildWhereClause(req.query, 
+      ['MLUniqueID', 'Topic', 'SpeakerSinger'], // Searchable fields
+      [ // All filterable fields from NewMediaLog
+        'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo', 
+        'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+        'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+        'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+        'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+        'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+        'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2', 
+        'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+        'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+        'Synopsis','LocationWithinAshram','Keywords','Grading' ,'Segment Category','Segment Duration','TopicgivenBy'
+      ]
+    );
 
+    const dataQuery = `SELECT * FROM NewMediaLog ${whereString}`;
+    const [results] = await db.query(dataQuery, params);
 
+    if (results.length === 0) {
+        return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row => 
+        headers.map(header => {
+            const value = row[header];
+            const strValue = String(value === null || value === undefined ? '' : value);
+            return `"${strValue.replace(/"/g, '""')}"`;
+        }).join(',')
+    );
+
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="satsang-category_export.csv"');
+    res.status(200).send(csvContent);
+
+  } catch (err) {
+    console.error("❌ API Error for /api/newmedialog/satsang-category/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
+
+app.put('/api/newmedialog/satsang-category/:MLUniqueID', async (req, res) => {
+  const { MLUniqueID } = req.params;
+
+  const {
+    fkDigitalRecordingCode, ContentFrom, ContentTo, Detail, SubDetail, Topic, Number,
+    fkGranth, Language, SubDuration, FootageType, fkOccasion, SpeakerSinger, fkOrganization,
+    Designation, fkCountry, fkState, fkCity, Venue, Guidance, Remarks, Synopsis, Keywords,
+    SatsangStart, SatsangEnd, AudioWAVDRCode, AudioMP3DRCode, LastModifiedBy
+  } = req.body;
+
+const SegmentCategory = req.body['Segment Category'];
+  if (!MLUniqueID) {
+    return res.status(400).json({ error: "MLUniqueID is required." });
+  }
+
+  try {
+    const query = `
+      UPDATE NewMediaLog
+      SET
+        fkDigitalRecordingCode = ?,
+        ContentFrom = ?,
+        ContentTo = ?,
+        Detail = ?,
+        SubDetail = ?,
+        Topic = ?,
+        Number = ?,
+        fkGranth = ?,
+        Language = ?,
+        SubDuration = ?,
+        \`Segment Category\` = ?,
+        FootageType = ?,
+        fkOccasion = ?,
+        SpeakerSinger = ?,
+        fkOrganization = ?,
+        Designation = ?,
+        fkCountry = ?,
+        fkState = ?,
+        fkCity = ?,
+        Venue = ?,
+        Guidance = ?,
+        Remarks = ?,
+        Synopsis = ?,
+        Keywords = ?,
+        SatsangStart = ?,
+        SatsangEnd = ?,
+        AudioWAVDRCode = ?,
+        AudioMP3DRCode = ?,
+        LastModifiedBy = ?,
+        LastModifiedTimestamp = NOW()
+      WHERE MLUniqueID = ?
+    `;
+
+    const [result] = await db.query(query, [
+      fkDigitalRecordingCode, ContentFrom, ContentTo, Detail, SubDetail, Topic, Number,
+      fkGranth, Language, SubDuration, SegmentCategory, FootageType, fkOccasion,
+      SpeakerSinger, fkOrganization, Designation, fkCountry, fkState, fkCity, Venue,
+      Guidance, Remarks, Synopsis, Keywords, SatsangStart, SatsangEnd,
+      AudioWAVDRCode, AudioMP3DRCode, LastModifiedBy || '', MLUniqueID
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: `Satsang record with ID ${MLUniqueID} not found.` });
+    }
+
+    res.status(200).json({ message: "Satsang Category record updated successfully." });
+  } catch (err) {
+    console.error("❌ Database error on /api/newmedialog/satsang-category/:MLUniqueID:", err);
+    res.status(500).json({ error: "Failed to update Satsang Category record." });
+  }
+});
 
 
 
@@ -1416,9 +2212,12 @@ app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
     IsPPGNotPresent, Guidance, DiskMasterDuration, EventRefRemarksCounters, EventRefMLID,
     EventRefMLID2, DubbedLanguage, DubbingArtist, HasSubtitle, SubTitlesLanguage, EditingDeptRemarks,
     EditingType, BhajanType, IsDubbed, NumberSource, TopicSource, Synopsis, LocationWithinAshram,
-    Keywords, Grading, 'Segment Category': SegmentCategory, 'Segment Duration': SegmentDuration,
-    TopicGivenBy, LastModifiedBy
+    Keywords, Grading, TopicGivenBy, LastModifiedBy
   } = req.body;
+
+  // FIX: Manually access keys with spaces
+  const SegmentCategory = req.body['Segment Category'];
+  const SegmentDuration = req.body['Segment Duration'];
 
   if (!MLUniqueID) {
     return res.status(400).json({ error: "MLUniqueID is required." });
@@ -1520,6 +2319,187 @@ app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
   }
 });
 
+// --- NEW ENDPOINT for Edited Highlights ---
+app.get('/api/edited-highlights', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'RecordingName', 'RecordingCode', 'Duration', 'Teams', 'FromDate', 'ToDate',
+      'EventName', 'EventCode', 'Yr', 'EditingStatus', 'FootageType'
+    ];
+
+    const aliases = {
+      RecordingCode: 'dr',
+      FromDate: 'e',
+      ToDate: 'e',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e',
+      EditingStatus: 'nml',
+      FootageType: 'nml'
+    };
+
+    const searchFields = ['dr.RecordingName', 'dr.RecordingCode', 'e.EventName', 'e.EventCode'];
+
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
+
+    const staticWhere = `
+      (nml.EditingStatus IN ("Edited (With Titles)", "Edited (Without Titles)", "Edited"))
+      AND (nml.FootageType IN ("Glimpses", "Versions"))
+    `;
+
+    let finalWhere = '';
+    if (dynamicWhere) {
+      finalWhere = `${dynamicWhere} AND ${staticWhere}`;
+    } else {
+      finalWhere = `WHERE ${staticWhere}`;
+    }
+
+    const dateColumns = ['FromDate', 'ToDate'];
+    const numericColumns = [];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY e.FromDate DESC';
+
+    // --- Count Query ---
+    const countQuery = `
+      SELECT COUNT(DISTINCT dr.RecordingCode) as total
+      FROM DigitalRecordings dr
+      INNER JOIN NewMediaLog nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
+      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+      ${finalWhere}
+    `;
+    const [[{ total }]] = await db.query(countQuery, dynamicParams);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- Data Query ---
+    const dataQuery = `
+      SELECT
+        dr.RecordingName,
+        dr.RecordingCode,
+        dr.Duration,
+        dr.Teams,
+        e.FromDate,
+        e.ToDate,
+        e.EventName,
+        e.EventCode,
+        CONCAT(COALESCE(e.EventName, ''), CASE WHEN COALESCE(e.EventName, '') <> '' AND COALESCE(e.EventCode, '') <> '' THEN ' - ' ELSE '' END, COALESCE(e.EventCode, '')) AS EventDisplay,
+        e.Yr
+      FROM DigitalRecordings dr
+      INNER JOIN NewMediaLog nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
+      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+      ${finalWhere}
+      GROUP BY dr.RecordingCode
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
+
+    const [results] = await db.query(dataQuery, [...dynamicParams, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
+  } catch (err) {
+    console.error("❌ Database query error on /api/edited-highlights:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
+});
+
+
+// --- EXPORT ENDPOINT for Edited Highlights ---
+app.get('/api/edited-highlights/export', async (req, res) => {
+  try {
+    const filterableColumns = [
+      'RecordingName', 'RecordingCode', 'Duration', 'Teams', 'FromDate', 'ToDate',
+      'EventName', 'EventCode', 'Yr', 'EditingStatus', 'FootageType'
+    ];
+
+    const aliases = {
+      RecordingCode: 'dr',
+      FromDate: 'e',
+      ToDate: 'e',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e',
+      EditingStatus: 'nml',
+      FootageType: 'nml'
+    };
+
+    const searchFields = ['dr.RecordingName', 'dr.RecordingCode', 'e.EventName', 'e.EventCode'];
+
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
+
+    const staticWhere = `
+      (nml.EditingStatus IN ("Edited (With Titles)", "Edited (Without Titles)", "Edited"))
+      AND (nml.FootageType IN ("Glimpses", "Versions"))
+    `;
+
+    let finalWhere = '';
+    if (dynamicWhere) {
+      finalWhere = `${dynamicWhere} AND ${staticWhere}`;
+    } else {
+      finalWhere = `WHERE ${staticWhere}`;
+    }
+
+    const dateColumns = ['FromDate', 'ToDate'];
+    const numericColumns = [];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY e.FromDate DESC';
+
+    // --- Data Query (no pagination) ---
+    const dataQuery = `
+      SELECT
+        dr.RecordingName,
+        dr.RecordingCode,
+        dr.Duration,
+        dr.Teams,
+        e.FromDate,
+        e.ToDate,
+        e.EventName,
+        e.EventCode,
+        CONCAT(COALESCE(e.EventName, ''), CASE WHEN COALESCE(e.EventName, '') <> '' AND COALESCE(e.EventCode, '') <> '' THEN ' - ' ELSE '' END, COALESCE(e.EventCode, '')) AS EventDisplay,
+        e.Yr
+      FROM DigitalRecordings dr
+      INNER JOIN NewMediaLog nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
+      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+      ${finalWhere}
+      GROUP BY dr.RecordingCode
+      ${orderByString}
+    `;
+
+    const [results] = await db.query(dataQuery, dynamicParams);
+
+    if (results.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row => 
+      headers.map(header => {
+        const value = row[header];
+        const strValue = String(value === null || value === undefined ? '' : value);
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="edited-highlights_export.csv"');
+    res.status(200).send(csvContent);
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/edited-highlights/export:", err);
+    res.status(500).json({ error: 'CSV export failed' });
+  }
+});
 // --- UPGRADED DigitalRecording Endpoints ---
 // ...existing code...
 app.get('/api/digitalrecording', async (req, res) => {
