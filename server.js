@@ -365,7 +365,7 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
 
 // ✅ REPLACEMENT for your buildOrderByClause function
 // ✅ REPLACEMENT for your buildOrderByClause function
-const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = [], numericColumns = []) => {
+const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = [], numericColumns = [], naturalSortColumns = []) => {
   let { sortBy, sortDirection } = queryParams;
 
   if (!sortBy || sortBy === 'none') {
@@ -396,6 +396,12 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {},
       sortExpression = `STR_TO_DATE(${prefixedField}, '%d-%m-%Y')`;
     } else if (numericColumns.includes(field)) {
       sortExpression = `CAST(${prefixedField} AS UNSIGNED)`;
+    } else if (naturalSortColumns.includes(field)) {
+      // Natural Sort: sort by text part, then by numeric part
+      const textPart = `REGEXP_SUBSTR(${prefixedField}, '^[a-zA-Z_\\\\-]+')`;
+      const numPart = `CAST(REGEXP_SUBSTR(${prefixedField}, '[0-9]+$') AS UNSIGNED)`;
+      // The direction applies to both parts to keep them together
+      return `${textPart} ${direction}, ${numPart} ${direction}`;
     }
 
     // Append the direction to each field
@@ -611,7 +617,7 @@ app.get('/api/newmedialog', async (req, res) => {
     // global search fields (keeps UI quick-search useful)
     const searchFields = [
      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution',
       'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
       'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
       'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
@@ -622,7 +628,7 @@ app.get('/api/newmedialog', async (req, res) => {
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
-      'EventName','EventCode','Yr',
+      'EventName','EventCode','Yr','Detail','SubDetail',
       'RecordingName','RecordingCode','PreservationStatus','Masterquality'
     ];
 
@@ -1907,8 +1913,21 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
 
     // global/search fields
     const searchFields = [
-      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode', 'fkEventCategory'
+     'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
+      // Columns from DigitalRecordings / Events
+      'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
+      'EventName','EventCode','Yr',
+      // UI computed
+      'EventName - EventCode' 
     ];
 
     // Build dynamic WHERE using correct arg order and aliases
@@ -8579,6 +8598,57 @@ app.get('/api/is-audio-recorded/options', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/is-audio-recorded/options:", err);
     res.status(500).json({ error: 'Failed to fetch IsAudioRecorded options.' });
+  }
+});
+
+app.post('/api/manage-columns/add', async (req, res) => {
+  const { tableName, columnKey } = req.body;
+
+  if (!tableName || !columnKey) {
+    return res.status(400).json({ error: 'Table name and column key are required.' });
+  }
+
+  // Basic validation to prevent obvious SQL injection.
+  // IMPORTANT: In a production environment, you should have a strict allow-list of table names.
+  if (!/^[a-zA-Z0-9_]+$/.test(tableName) || !/^[a-zA-Z0-9_]+$/.test(columnKey)) {
+    return res.status(400).json({ error: 'Invalid table or column name.' });
+  }
+
+  try {
+    // Using TEXT as a flexible default for user-created columns.
+    const addColumnQuery = `ALTER TABLE ?? ADD COLUMN ?? TEXT NULL DEFAULT NULL`;
+    await db.query(addColumnQuery, [tableName, columnKey]);
+    
+    console.log(`✅ Column '${columnKey}' added to table '${tableName}'.`);
+    res.status(200).json({ message: `Column '${columnKey}' added successfully to '${tableName}'.` });
+  } catch (err) {
+    console.error(`❌ Error adding column '${columnKey}' to table '${tableName}':`, err);
+    res.status(500).json({ error: `Failed to add column. It might already exist or there was a database error.` });
+  }
+});
+
+
+app.post('/api/manage-columns/delete', async (req, res) => {
+  const { tableName, columnKey } = req.body;
+
+  if (!tableName || !columnKey) {
+    return res.status(400).json({ error: 'Table name and column key are required.' });
+  }
+
+  // Basic validation.
+  if (!/^[a-zA-Z0-9_]+$/.test(tableName) || !/^[a-zA-Z0-9_]+$/.test(columnKey)) {
+    return res.status(400).json({ error: 'Invalid table or column name.' });
+  }
+
+  try {
+    const deleteColumnQuery = `ALTER TABLE ?? DROP COLUMN ??`;
+    await db.query(deleteColumnQuery, [tableName, columnKey]);
+
+    console.log(`✅ Column '${columnKey}' deleted from table '${tableName}'.`);
+    res.status(200).json({ message: `Column '${columnKey}' deleted successfully from '${tableName}'.` });
+  } catch (err) {
+    console.error(`❌ Error deleting column '${columnKey}' from table '${tableName}':`, err);
+    res.status(500).json({ error: `Failed to delete column. It might not exist or there was a database error.` });
   }
 });
 // Start server
