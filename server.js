@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require("cors");
 const db = require('./db'); // This now imports the mysql2 pool
 const { google } = require("googleapis");
+const { GoogleAuth } = require('google-auth-library');
 const nodemailer = require("nodemailer");
 const app = express();
 app.use(cors());
@@ -397,11 +398,15 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {},
     } else if (numericColumns.includes(field)) {
       sortExpression = `CAST(${prefixedField} AS UNSIGNED)`;
     } else if (naturalSortColumns.includes(field)) {
-      // Natural Sort: sort by text part, then by numeric part
+      // Enhanced Natural Sort:
+      // 1. Prioritize purely numeric strings first.
+      // 2. Then sort alphanumeric strings by their text and number parts.
+      const isNumeric = `CASE WHEN ${prefixedField} REGEXP '^[0-9]+$' THEN 0 ELSE 1 END`;
       const textPart = `REGEXP_SUBSTR(${prefixedField}, '^[a-zA-Z_\\\\-]+')`;
       const numPart = `CAST(REGEXP_SUBSTR(${prefixedField}, '[0-9]+$') AS UNSIGNED)`;
-      // The direction applies to both parts to keep them together
-      return `${textPart} ${direction}, ${numPart} ${direction}`;
+      
+      // The direction applies to all parts to keep them together
+      return `${isNumeric} ${direction}, ${textPart} ${direction}, ${numPart} ${direction}`;
     }
 
     // Append the direction to each field
@@ -671,7 +676,8 @@ app.get('/api/newmedialog', async (req, res) => {
           COALESCE(nml.Detail, '' ),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+        ) AS DetailSub,
+        CONCAT_WS(' - ', NULLIF(nml.ContentFrom, ''), NULLIF(nml.Detail, ''), NULLIF(nml.fkCity, '')) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -1592,6 +1598,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
+        e.fkEventCategory,
         CONCAT(
           COALESCE(e.EventName, ''),
           CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
@@ -1889,9 +1896,9 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
-      // Columns from DigitalRecordings / Events
+      // From DigitalRecordings / Events
       'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
-      'EventName','EventCode','Yr',
+      'EventName','EventCode','Yr','fkEventCategory',
       // UI computed
       'EventName - EventCode'
     ];
@@ -1908,32 +1915,16 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
+      fkEventCategory: 'e',
       LastModifiedTimestamp: 'nml'
     };
 
-    // global/search fields
-    const searchFields = [
-     'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
-      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
-      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
-      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
-      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
-      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
-      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
-      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
-      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
-      // Columns from DigitalRecordings / Events
-      'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
-      'EventName','EventCode','Yr',
-      // UI computed
-      'EventName - EventCode' 
-    ];
+    const searchFields = filterableColumns;
 
-    // Build dynamic WHERE using correct arg order and aliases
+    // --- Build WHERE dynamically ---
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
 
-    // Support filtering by combined EventDisplay (UI uses EventDisplay or EventName-EventCode)
+    // Support EventDisplay (EventName - EventCode)
     let extraWhere = '';
     const extraParams = [];
     const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
@@ -1959,7 +1950,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       )
     `;
 
-    // Combine dynamicWhere (if any) with staticWhere and extraWhere
+    // Combine WHERE clauses
     let finalWhere = '';
     const finalParams = [];
 
@@ -1975,7 +1966,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       finalParams.push(...extraParams);
     }
 
-    // Count (include same JOINs)
+    // --- COUNT QUERY ---
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
@@ -1983,12 +1974,14 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec
+        ON e.fkEventCategory = ec.EventCategoryID
       ${finalWhere}
     `;
     const [[{ total }]] = await db.query(countQuery, finalParams);
     const totalPages = Math.ceil(total / limit);
 
-    // Projection matching UI
+    // --- MAIN DATA QUERY ---
     const dataQuery = `
       SELECT
         nml.MLUniqueID,
@@ -2028,6 +2021,8 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
+        e.fkEventCategory AS fkEventCategory,             -- ✅ Added Event FK
+        ec.EventCategory AS EventCategoryName,            -- ✅ Added category name
         CONCAT(
           COALESCE(e.EventName, ''),
           CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
@@ -2043,12 +2038,15 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec
+        ON e.fkEventCategory = ec.EventCategoryID        -- ✅ Join EventCategory table
       ${finalWhere}
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
 
+    // --- Send final response ---
     res.json({
       data: rows,
       pagination: {
@@ -2063,6 +2061,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // ...existing code...
 // ...existing code...
 
@@ -2187,9 +2186,242 @@ const SegmentCategory = req.body['Segment Category'];
 });
 
 
+// --- Google Sheet: ML Formal Pending ---
+app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const search = req.query.search?.trim()?.toLowerCase() || "";
+
+    const auth = new GoogleAuth({
+      keyFile: "service-account.json",
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+    const spreadsheetId = "16m_XfWuMPrX6mjuVvqLhzPbOzyTqvBapFXUDmFTXSV8";
+
+    const response = await googleSheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "Media Log(Cue Sheet)",
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length <= 1) {
+      return res.status(404).json({ message: "No data found in Google Sheet." });
+    }
+
+    // Extract headers and rows
+    const headers = rows[0];
+    const allData = rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        obj[h] = row[i] !== undefined && row[i] !== null ? row[i] : "";
+      });
+      return obj;
+    });
+
+    // 🔍 Filterable columns
+    const filterableColumns = [
+      "Footage Sr. No.",
+      "Log Sr.No",
+      "Event Code",
+      "Digital Media Code",
+      "ML Unique ID",
+      "Occasion",
+      "Editing Status",
+      "Footage Type",
+      "Video Distribution",
+      "Content Details",
+      "Segment Category",
+      "Content Language",
+      "Content Speaker/Singer",
+      "Saints/Speaker's Organization",
+      "Speakers/Dignitary Designation/Profession",
+      "Content Country",
+      "Content State/Province",
+      "Content City/Town",
+      "Topic",
+      "Keywords",
+      "Grading",
+    ];
+
+    // 🔍 Apply search filter
+    let filteredData = allData;
+    if (search) {
+      filteredData = allData.filter((row) =>
+        filterableColumns.some((key) =>
+          (row[key] || "").toString().toLowerCase().includes(search)
+        )
+      );
+    }
+
+    // 🎯 Apply specific field filters (e.g. ?Occasion=GuruPurnima)
+    Object.keys(req.query).forEach((key) => {
+      if (filterableColumns.includes(key)) {
+        const value = req.query[key].toLowerCase();
+        filteredData = filteredData.filter((row) =>
+          (row[key] || "").toString().toLowerCase().includes(value)
+        );
+      }
+    });
+
+    // 🔢 Pagination
+    const totalItems = filteredData.length;
+    const totalPages = Math.ceil(totalItems / limit);
+    const paginatedData = filteredData.slice(offset, offset + limit);
+
+    res.json({
+      data: paginatedData,
+      pagination: { page, limit, totalItems, totalPages },
+    });
+  } catch (err) {
+    console.error("❌ Google Sheets API Error:", err);
+    res.status(500).json({ error: "Failed to fetch data from Google Sheet." });
+  }
+});
 
 
+app.get('/api/google-sheet/ml-formal-pending/export', async (req, res) => {
+  try {
+    // --- 1. AUTH and FETCH from Google Sheet ---
+    const auth = new GoogleAuth({
+      keyFile: 'service-account.json',
+      scopes: 'https://www.googleapis.com/auth/spreadsheets',
+    });
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: 'v4', auth: client });
+    const spreadsheetId = '16m_XfWuMPrX6mjuVvqLhzPbOzyTqvBapFXUDmFTXSV8';
 
+    const getSheetData = await googleSheets.spreadsheets.values.get({
+      auth,
+      spreadsheetId,
+      range: 'Media Log(Cue Sheet)',
+    });
+
+    const allRows = getSheetData.data.values || [];
+    if (allRows.length < 2) {
+      return res.status(404).send("No data found to export.");
+    }
+
+    const headers = allRows[0];
+    const rawData = allRows.slice(1).map(row => {
+      const rowData = {};
+      headers.forEach((header, index) => {
+        rowData[header] = row[index] || ''; // Ensure value is not null/undefined
+      });
+      return rowData;
+    });
+
+    // --- 2. DEFINE KeyMap for filtering ---
+    const keyMap = {
+      "Footage Sr. No.": "footageSrNo", "Log Sr.No": "logSrNo", "Event Code": "eventCode",
+      "Digital Media Code": "digitalMediaCode", "ML Unique ID": "mlUniqueID",
+      "Content Date from (dd.mm.yyyy)": "contentDateFrom", "Content Date to(dd.mm.yyyy)": "contentDateTo",
+      "Time of Day": "timeOfDay", "Occasion": "occasion", "Editing Status": "editingStatus",
+      "Footage Type": "footageType", "Video Distribution": "videoDistribution",
+      "Content Details": "contentDetails", "Content Sub Details": "contentSubDetails",
+      "Segment Category": "segmentCategory", "Segment Duration": "segmentDuration",
+      "Counter from": "counterFrom", "Counter to": "counterTo", "Sub Duration": "subDuration",
+      "Total Duration": "totalDuration", "Content Language": "contentLanguage",
+      "Content Speaker/Singer": "contentSpeakerSinger", "Saints/Speaker's Organization": "saintsSpeakersOrganization",
+      "Speakers/Dignitary Designation/Profession": "speakersDignitaryDesignationProfession",
+      "Content Country": "contentCountry", "Content State/Province": "contentStateProvince",
+      "Content City/Town": "contentCityTown", "Content Location": "contentLocation",
+      "Location within Ashram": "locationWithinAshram", "Low Res DR code": "lowResDRCode",
+      "Low Res MLID": "lowResMLID", "Low Res Subtitle": "lowResSubtitle",
+      "Low Res IsStartPage": "lowResIsStartPage", "Low Res Remarks": "lowResRemarks",
+      "Low Res Counter From": "lowResCounterFrom", "Low Res Counter To": "lowResCounterTo",
+      "Low Res Total Duration": "lowResTotalDuration", "Granth Name": "granthName",
+      "Number (Patrank/Adhyay/Prakaran/Padd/Shlok)": "numberPatrank", "Topic": "topic",
+      "Topic Given By": "topicGivenBy", "Synopsis": "synopsis", "Keywords": "keywords",
+      "Series Name": "seriesName", "Satsang START (3 words)": "satsangStart",
+      "Satsang End (3 words)": "satsangEnd", "Audio MP3 Distribution": "audioMP3Distribution",
+      "Audio WAV Distribution": "audioWAVDistribution", "Audio MP3 DR Code": "audioMP3DRCode",
+      "Audio WAV DR Code": "audioWAVDRCode", "Audio Full WAV DR Code": "audioFullWAVDRCode",
+      "Remarks": "remarks", "Start page": "startPage", "End Page": "endPage",
+      "Footage (Mention if VERY PRIVATE)": "footageVeryPrivate",
+      "Mention ONLY if Bapa NOT present": "bapaNotPresent",
+      "Guidance Received from PPG/Hierarchy": "guidanceFromPPG",
+      "App/Distribution Duration": "appDistributionDuration",
+      "Event Reference - Remarks/Counters": "eventRefRemarks",
+      "Event Reference 1 - ML Unique ID": "eventRef1MLID", "Event Reference 2 - ML Unique ID": "eventRef2MLID",
+      "Dubbed Language": "dubbedLanguage", "Dubbing Artist": "dubbingArtist",
+      "Sub -Titles": "subTitles", "Sub Titles Language": "subTitlesLanguage",
+      "Editing Type (Audio)": "editingTypeAudio", "Bhajan Type/Theme": "bhajanTypeTheme",
+      "Grading": "grading"
+    };
+    
+    const filterableColumns = Object.values(keyMap);
+    const searchFields = filterableColumns;
+
+    // --- 3. TRANSFORM and FILTER ---
+    const cleanData = rawData.map(rawRow => {
+      const cleanRow = {};
+      for (const header in keyMap) {
+        if (rawRow.hasOwnProperty(header)) {
+          cleanRow[keyMap[header]] = rawRow[header];
+        }
+      }
+      return cleanRow;
+    });
+
+    const { search, ...simpleFilters } = req.query;
+    let filteredData = cleanData;
+
+    if (search) {
+      const lowerCaseSearch = search.toLowerCase();
+      filteredData = filteredData.filter(row => 
+        searchFields.some(field => 
+          row[field] && String(row[field]).toLowerCase().includes(lowerCaseSearch)
+        )
+      );
+    }
+
+    for (const key in simpleFilters) {
+      const filterValue = simpleFilters[key];
+      if (filterValue && filterableColumns.includes(key)) {
+        const lowerCaseFilter = String(filterValue).toLowerCase();
+        filteredData = filteredData.filter(row => 
+          row[key] && String(row[key]).toLowerCase() === lowerCaseFilter
+        );
+      }
+    }
+
+    if (filteredData.length === 0) {
+      return res.status(404).send("No data found to export for the given filters.");
+    }
+
+    // --- 4. GENERATE CSV ---
+    // Use the original headers from the sheet for the CSV file
+    const csvHeader = headers.join(',');
+    const csvRows = filteredData.map(cleanRow => {
+      // Re-map from clean keys back to original header order for CSV export
+      return headers.map(header => {
+        const cleanKey = keyMap[header];
+        const value = cleanRow[cleanKey] || '';
+        const strValue = String(value).replace(/"/g, '""'); // Escape double quotes
+        return `"${strValue}"`;
+      }).join(',');
+    });
+
+    const csvContent = [csvHeader, ...csvRows].join('\n');
+
+    // --- 5. SEND FILE ---
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="ml-formal-pending-export.csv"');
+    res.status(200).send(csvContent);
+
+  } catch (err) {
+    console.error("❌ API Error for /api/google-sheet/ml-formal-pending/export:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'CSV export failed: ' + err.message });
+    }
+  }
+});
 
 app.get('/api/newmedialog/export', async (req, res) => {
     try {
