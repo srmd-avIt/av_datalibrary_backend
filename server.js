@@ -581,6 +581,7 @@ app.put('/api/events/:EventID', async (req, res) => {
 
 
 // --- NewMediaLog Endpoints ---
+// --- NewMediaLog Endpoints ---
 app.get('/api/newmedialog', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -677,7 +678,16 @@ app.get('/api/newmedialog', async (req, res) => {
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
-        CONCAT_WS(' - ', NULLIF(nml.ContentFrom, ''), NULLIF(nml.Detail, ''), NULLIF(nml.fkCity, '')) AS ContentFromDetailCity
+       (CASE
+    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+        THEN NULL
+    ELSE CONCAT_WS(' - ',
+        NULLIF(nml.ContentFrom, ''),
+        NULLIF(nml.Detail, ''),
+        NULLIF(nml.fkCity, '')
+    )
+END) AS ContentFromDetailCity
+
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -828,7 +838,18 @@ app.get('/api/newmedialog/formal', async (req, res) => {
           COALESCE(nml.Detail, '' ),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+         ) AS DetailSub,
+       (CASE
+    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+        THEN NULL
+    ELSE CONCAT_WS(' - ',
+        NULLIF(nml.ContentFrom, ''),
+        NULLIF(nml.Detail, ''),
+        NULLIF(nml.fkCity, '')
+    )
+END) AS ContentFromDetailCity
+
+         
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -942,7 +963,26 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
           COALESCE(nml.Detail, '' ),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+        ) AS DetailSub,
+        (CASE 
+            WHEN nml.EventRefMLID IS NOT NULL AND nml.EventRefMLID != '' 
+            THEN (
+                SELECT TRIM(CONCAT_WS(' | ',
+                    NULLIF(DATE_FORMAT(ref.ContentFrom, '%d-%m-%Y'), ''),
+                    NULLIF(ref.Detail, ''),
+                    NULLIF(ref.fkCity, '')
+                ))
+                FROM NewMediaLog AS ref
+                WHERE ref.MLUniqueID = nml.EventRefMLID
+                LIMIT 1
+            )
+            ELSE NULL
+        END) AS EventRefMLID_Details,
+        (CASE
+            WHEN nml.EventRefMLID IS NOT NULL AND nml.EventRefMLID != ''
+            THEN NULL
+            ELSE CONCAT_WS(' - ', NULLIF(DATE_FORMAT(nml.ContentFrom, '%d-%m-%Y'), ''), NULLIF(nml.Detail, ''), NULLIF(nml.fkCity, ''))
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -1208,7 +1248,17 @@ app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
           COALESCE(nml.Detail, '' ),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+        ) AS DetailSub,
+       (CASE
+    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+        THEN NULL
+    ELSE CONCAT_WS(' - ',
+        NULLIF(nml.ContentFrom, ''),
+        NULLIF(nml.Detail, ''),
+        NULLIF(nml.fkCity, '')
+    )
+END) AS ContentFromDetailCity
+
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -1608,7 +1658,17 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
           COALESCE(nml.Detail, ''),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+        ) AS DetailSub,
+       (CASE
+    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+        THEN NULL
+    ELSE CONCAT_WS(' - ',
+        NULLIF(nml.ContentFrom, ''),
+        NULLIF(nml.Detail, ''),
+        NULLIF(nml.fkCity, '')
+    )
+END) AS ContentFromDetailCity
+
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -2032,7 +2092,17 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
           COALESCE(nml.Detail, ''),
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
-        ) AS DetailSub
+        ) AS DetailSub,
+      (CASE
+    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+        THEN NULL
+    ELSE CONCAT_WS(' - ',
+        NULLIF(nml.ContentFrom, ''),
+        NULLIF(nml.Detail, ''),
+        NULLIF(nml.fkCity, '')
+    )
+END) AS ContentFromDetailCity
+
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -2192,11 +2262,24 @@ app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-
     const search = req.query.search?.trim()?.toLowerCase() || "";
 
+    // 🟢 Create credentials object from .env variables
+    const credentials = {
+      type: process.env.SERVICE_ACCOUNT_TYPE,
+      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+    };
+
     const auth = new GoogleAuth({
-      keyFile: "service-account.json",
+      credentials,
       scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
     });
 
@@ -2214,17 +2297,15 @@ app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
       return res.status(404).json({ message: "No data found in Google Sheet." });
     }
 
-    // Extract headers and rows
     const headers = rows[0];
     const allData = rows.slice(1).map((row) => {
       const obj = {};
       headers.forEach((h, i) => {
-        obj[h] = row[i] !== undefined && row[i] !== null ? row[i] : "";
+        obj[h] = row[i] || "";
       });
       return obj;
     });
 
-    // 🔍 Filterable columns
     const filterableColumns = [
       "Footage Sr. No.",
       "Log Sr.No",
@@ -2249,27 +2330,24 @@ app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
       "Grading",
     ];
 
-    // 🔍 Apply search filter
     let filteredData = allData;
     if (search) {
       filteredData = allData.filter((row) =>
         filterableColumns.some((key) =>
-          (row[key] || "").toString().toLowerCase().includes(search)
+          (row[key] || "").toLowerCase().includes(search)
         )
       );
     }
 
-    // 🎯 Apply specific field filters (e.g. ?Occasion=GuruPurnima)
     Object.keys(req.query).forEach((key) => {
       if (filterableColumns.includes(key)) {
         const value = req.query[key].toLowerCase();
         filteredData = filteredData.filter((row) =>
-          (row[key] || "").toString().toLowerCase().includes(value)
+          (row[key] || "").toLowerCase().includes(value)
         );
       }
     });
 
-    // 🔢 Pagination
     const totalItems = filteredData.length;
     const totalPages = Math.ceil(totalItems / limit);
     const paginatedData = filteredData.slice(offset, offset + limit);
@@ -2283,7 +2361,6 @@ app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch data from Google Sheet." });
   }
 });
-
 
 app.get('/api/google-sheet/ml-formal-pending/export', async (req, res) => {
   try {
