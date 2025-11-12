@@ -485,30 +485,44 @@ const orderByString = buildOrderByClause(req.query, filterableColumns, {}, dateC
 
 app.get('/api/events/export', async (req, res) => {
   try {
-    // FIX: Call the generic buildWhereClause function
-    const { whereString, params } = buildWhereClause(req.query, ['EventCode', 'EventName', 'Yr'], ['EventID', 'EventCode', 'Yr','SubmittedDate','FromDate','ToDate', 'EventName','fkEventCategory','EventsRemarks','EventMonth','CommonId','IsSubEvent1','IsAudioRecorded','PravachanCount','UdhgoshCount','PaglaCount','PratisthaCount','SummaryRemarks','Pra-SU-duration','LastModifiedBy','LastModifiedTimestamp','NewEventFrom','NewEventTo' /* add more... */]);
-    const dataQuery = `SELECT * FROM Events ${whereString}`;
+    const exportColumns = [
+      'Yr',
+      'NewEventCategory',
+      'FromDate',
+      'ToDate',
+      'EventName',
+      'EventCode',
+      'EventRemarks'
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      ['EventCode', 'EventName', 'Yr', 'NewEventCategory', 'EventRemarks'],
+      exportColumns
+    );
+
+    const selectList = exportColumns.map(column => `Events.${db.escapeId(column)}`).join(', ');
+    const dataQuery = `SELECT ${selectList} FROM Events ${whereString}`;
     const [results] = await db.query(dataQuery, params);
 
     if (results.length === 0) {
-      return res.status(404).send("No data found to export for the given filters.");
+      return res.status(404).send('No data found to export for the given filters.');
     }
 
-    const headers = Object.keys(results[0]);
+    const headers = exportColumns;
     const csvHeader = headers.join(',');
     const csvRows = results.map(row => headers.map(header => {
-        const value = row[header];
-        const strValue = String(value === null || value === undefined ? '' : value);
-        return `"${strValue.replace(/"/g, '""')}"`;
+      const value = row[header];
+      const strValue = String(value === null || value === undefined ? '' : value);
+      return `"${strValue.replace(/"/g, '""')}"`;
     }).join(','));
     const csvContent = [csvHeader, ...csvRows].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="events_export.csv"');
     res.status(200).send(csvContent);
-
   } catch (err) {
-    console.error("Database query error on /api/users/export:", err);
+    console.error('Database query error on /api/events/export:', err);
     res.status(500).json({ error: 'CSV export failed' });
   }
 });
@@ -1976,7 +1990,8 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       EventCode: 'e',
       Yr: 'e',
       fkEventCategory: 'e',
-      LastModifiedTimestamp: 'nml'
+      LastModifiedTimestamp: 'nml',
+      LastModifiedBy: 'nml'
     };
 
     const searchFields = filterableColumns;
