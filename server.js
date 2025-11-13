@@ -534,7 +534,7 @@ app.put('/api/events/:EventID', async (req, res) => {
   const {
     EventCode, Yr, SubmittedDate, FromDate, ToDate, EventName, fkEventCategory,
     NewEventCategory, EventRemarks, EventMonth, CommonID, IsSubEvent1, IsAudioRecorded,
-    PravachanCount, UdgoshCount, PaglaCount, PratishthaCount, SummaryRemarks,
+    PravachanCount, UdhgoshCount, PaglaCount, PratisthaCount, SummaryRemarks,
     'Pra-SU-duration': PraSUDuration, LastModifiedBy, NewEventFrom, NewEventTo
   } = req.body;
 
@@ -562,9 +562,9 @@ app.put('/api/events/:EventID', async (req, res) => {
         IsSubEvent1 = ?,
         IsAudioRecorded = ?,
         PravachanCount = ?,
-        UdgoshCount = ?,
+        UdhgoshCount = ?,
         PaglaCount = ?,
-        PratishthaCount = ?,
+        PratisthaCount = ?,
         SummaryRemarks = ?,
         \`Pra-SU-duration\` = ?,
         LastModifiedBy = ?,
@@ -577,7 +577,7 @@ app.put('/api/events/:EventID', async (req, res) => {
     const [result] = await db.query(query, [
       EventCode, Yr, SubmittedDate, FromDate, ToDate, EventName, fkEventCategory,
       NewEventCategory, EventRemarks, EventMonth, CommonID, IsSubEvent1, IsAudioRecorded,
-      PravachanCount, UdgoshCount, PaglaCount, PratishthaCount, SummaryRemarks,
+      PravachanCount, UdhgoshCount, PaglaCount, PratisthaCount, SummaryRemarks,
       PraSUDuration, LastModifiedBy || '', NewEventFrom, NewEventTo, EventID
     ]);
 
@@ -2898,6 +2898,7 @@ app.get('/api/digitalrecording', async (req, res) => {
       RecordingCode: 'dr',
       RecordingName: 'dr',
       fkEventCode: 'dr',
+      SubmittedDate: 'dr',
       LastModifiedTimestamp: 'dr'
     };
 
@@ -3096,7 +3097,6 @@ app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
         ProductionBucket = ?,
         DistributionDriveLink = ?,
         Teams = ?,
-        LastModifiedBy = ?,
         LastModifiedTimestamp = NOW()
       WHERE RecordingCode = ?
     `;
@@ -3107,7 +3107,7 @@ app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
       CounterError, ReasonError, QcRemarksCheckedOn, PreservationStatus, QCSevak,
       MasterProductTitle, QcStatus, fkDistributionLabel, SubmittedDate, PresStatGuidDt,
       InfoOnCassette, Masterquality, IsInformal, FilesizeInBytes, AssociatedDR, Dimension,
-      ProductionBucket, DistributionDriveLink, Teams, LastModifiedBy || '', RecordingCode
+      ProductionBucket, DistributionDriveLink, Teams, RecordingCode
     ]);
 
     if (result.affectedRows === 0) {
@@ -5467,7 +5467,7 @@ app.post('/api/editing-type', async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTimestamp)
+      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTs)
       VALUES (?, ?, ?, NOW())
     `;
     const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy]);
@@ -5641,7 +5641,7 @@ app.post('/api/editing-status', async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTimestamp)
+      INSERT INTO EditingType (EdType, AudioVideo, LastModifiedBy, LastModifiedTs)
       VALUES (?, ?, ?, NOW())
     `;
     const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy]);
@@ -6345,7 +6345,7 @@ app.post('/api/granths', async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO NewGranths (Name, LastModifiedBy, LastModifiedTimestamp)
+      INSERT INTO NewGranths (Name, LastModifiedBy, LastModifiedTs)
       VALUES (?, ?, NOW())
     `;
     const [result] = await db.query(query, [Name, LastModifiedBy]);
@@ -7897,7 +7897,7 @@ app.post('/api/topic-number-source', async (req, res) => {
 
   try {
     const query = `
-      INSERT INTO TopicNumberSource (TNName, LastModifiedBy, LastModifiedTimestamp)
+      INSERT INTO TopicNumberSource (TNName, LastModifiedBy, LastModifiedTs)
       VALUES (?, ?, NOW())
     `;
     const [result] = await db.query(query, [TNName, LastModifiedBy]);
