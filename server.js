@@ -1640,8 +1640,35 @@ app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
       SELECT
         nml.MLUniqueID,
         nml.FootageSrNo,
+        nml.LogSerialNo,
         nml.fkDigitalRecordingCode,
         nml.ContentFrom,
+        nml.ContentTo,
+        nml.TimeOfDay,
+        nml.fkOccasion,
+        nml.EditingStatus,
+        nml.FootageType,
+        nml.Remarks,
+        nml.Guidance,
+        nml.IsInformal,
+        nml.fkGranth,
+        nml.Number,
+        nml.Topic,
+        nml.Keywords,
+        nml.TopicgivenBy,
+        nml.IsDubbed,
+        nml.DubbedLanguage,
+        nml.DubbingArtist,
+        nml.SpeakerSinger,
+        nml.fkOrganization,
+        nml.Designation,
+        nml.fkCountry,
+        nml.fkState,
+        nml.fkCity,
+        nml.Venue,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.TotalDuration,
         nml.Detail,
         nml.SubDetail,
         nml.\`Segment Category\` ,
@@ -2059,20 +2086,27 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
     // --- MAIN DATA QUERY ---
     const dataQuery = `
       SELECT
-        nml.MLUniqueID,
+       nml.MLUniqueID,
+        nml.FootageSrNo,
+        nml.LogSerialNo,
         nml.fkDigitalRecordingCode,
         nml.ContentFrom,
         nml.ContentTo,
-        nml.Detail,
-        nml.SubDetail,
-        nml.Topic,
-        nml.Number,
-        nml.fkGranth AS Granths,
-        nml.Language,
-        nml.SubDuration,
-        nml.\`Segment Category\`,
-        nml.FootageType,
+        nml.TimeOfDay,
         nml.fkOccasion,
+        nml.EditingStatus,
+        nml.FootageType,
+        nml.Remarks,
+        nml.Guidance,
+        nml.IsInformal,
+        nml.fkGranth,
+        nml.Number,
+        nml.Topic,
+        nml.Keywords,
+        nml.TopicgivenBy,
+        nml.IsDubbed,
+        nml.DubbedLanguage,
+        nml.DubbingArtist,
         nml.SpeakerSinger,
         nml.fkOrganization,
         nml.Designation,
@@ -2080,14 +2114,24 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         nml.fkState,
         nml.fkCity,
         nml.Venue,
-        nml.Guidance,
-        nml.Remarks,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.TotalDuration,
+        nml.Detail,
+        nml.SubDetail,
+        nml.\`Segment Category\` ,
+        nml.TopicSource,
+        nml.SubDuration,
+        nml.Language,
+        nml.HasSubtitle,
+        nml.SubTitlesLanguage,
         nml.Synopsis,
-        nml.Keywords,
         nml.SatsangStart,
         nml.SatsangEnd,
-        nml.AudioWAVDRCode,
         nml.AudioMP3DRCode,
+        nml.fkCity,
+        nml.LastModifiedTimestamp,
+        nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink,
         dr.RecordingName AS Recordingname,
@@ -3258,37 +3302,7 @@ app.get('/api/auxfiles/:fkMLID', async (req, res) => {
 });
 
 
-app.put('/api/aux/:new_auxid', async (req, res) => {
-  const { new_auxid } = req.params; // Extract the `new_auxid` from the URL
-  const { SRTLink } = req.body; // Extract the `SRTLink` from the request body
 
-  if (!new_auxid) {
-    return res.status(400).json({ error: "Auxiliary file ID (new_auxid) is required." });
-  }
-
-  if (!SRTLink) {
-    return res.status(400).json({ error: "SRTLink is required." });
-  }
-
-  try {
-    const query = `
-      UPDATE AuxFiles
-      SET SRTLink = ?, ModifiedOn = NOW()
-      WHERE new_auxid = ?
-    `;
-
-    const [result] = await db.query(query, [SRTLink, new_auxid]);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: `Auxiliary file with ID ${new_auxid} not found.` });
-    }
-
-    res.status(200).json({ message: "SRT Link updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/aux/:new_auxid:", err);
-    res.status(500).json({ error: "Failed to update SRT Link." });
-  }
-});
 
 app.put('/api/auxfiles/:new_auxid', async (req, res) => {
   const { new_auxid } = req.params;
@@ -5060,7 +5074,7 @@ app.get('/api/digital-master-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/digitalmastercategory/:DMCID', async (req, res) => {
+app.put('/api/digital-master-category/:DMCID', async (req, res) => {
   const { DMCID } = req.params;
   const { DMCategory_name, LastModifiedBy } = req.body;
 
@@ -5238,7 +5252,7 @@ app.get('/api/distribution-label/export', async (req, res) => {
   }
 });
 
-app.put('/api/distributionlabel/:LabelID', async (req, res) => {
+app.put('/api/distribution-label/:LabelID', async (req, res) => {
  const { LabelID } = req.params;
   const { LabelName, LastModifiedBy } = req.body;
 
@@ -5417,7 +5431,7 @@ app.get('/api/editing-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/editingtype/:EdID', async (req, res) => {
+app.put('/api/editing-type/:EdID', async (req, res) => {
   const { EdID } = req.params;
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
@@ -5600,7 +5614,7 @@ app.get('/api/editing-status/export', async (req, res) => {
   }
 });
 
-app.put('/api/editingstatus/:EdID', async (req, res) => {
+app.put('/api/editing-status/:EdID', async (req, res) => {
   const { EdID } = req.params;
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
@@ -5778,7 +5792,7 @@ app.get('/api/event-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/eventcategory/:EventCategoryID', async (req, res) => {
+app.put('/api/event-category/:EventCategoryID', async (req, res) => {
     const { EventCategoryID } = req.params;
   const { EventCategory, LastModifiedBy } = req.body;
 
@@ -5984,7 +5998,7 @@ app.get('/api/format-type/options', async (req, res) => {
   }
 });
 
-app.put('/api/footagetype/:FootageID', async (req, res) => {
+app.put('/api/footage-type/:FootageID', async (req, res) => {
   const { FootageID } = req.params;
   const { FootageTypeList, LastModifiedBy } = req.body;
 
@@ -6124,7 +6138,7 @@ app.get('/api/format-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/formattype/:FTID', async (req, res) => {
+app.put('/api/format-type/:FTID', async (req, res) => {
     const { FTID } = req.params;
   const { Type, LastModifiedBy } = req.body;
 
@@ -7004,7 +7018,7 @@ app.get('/api/new-event-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/neweventcategory/:CategoryID', async (req, res) => {
+app.put('/api/new-event-category/:SrNo', async (req, res) => {
   const { SrNo } = req.params;
   const { NewEventCategoryName, LastModifiedBy, MARK_DISCARD } = req.body;
 
@@ -7178,7 +7192,7 @@ app.get('/api/new-cities/export', async (req, res) => {
   }
 });
 
-app.put('/api/newcities/:CityID', async (req, res) => {
+app.put('/api/new-cities/:CityID', async (req, res) => {
    const { CityID } = req.params;
   const { City, LastModifiedBy } = req.body;
 
@@ -7352,7 +7366,7 @@ app.get('/api/new-countries/export', async (req, res) => {
   }
 });
 
-app.put('/api/newcountries/:CountryID', async (req, res) => {
+app.put('/api/new-countries/:CountryID', async (req, res) => {
   const { CountryID } = req.params;
   const { Country, LastModifiedBy } = req.body;
 
@@ -7524,7 +7538,7 @@ app.get('/api/new-states/export', async (req, res) => {
   }
 });
 
-app.put('/api/newstates/:StateID', async (req, res) => {
+app.put('/api/new-states/:StateID', async (req, res) => {
  const { StateID } = req.params;
   const { State, LastModifiedBy } = req.body;
 
@@ -7860,7 +7874,7 @@ app.get('/api/topic-number-source', async (req, res) => {
   }
 });
 
-app.put('/api/topicnumbersource/:TNID', async (req, res) => {
+app.put('/api/topic-number-source/:TNID', async (req, res) => {
   const { TNID } = req.params;
   const { TNName, LastModifiedBy } = req.body;
 
