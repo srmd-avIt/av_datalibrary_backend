@@ -5529,7 +5529,7 @@ app.put('/api/editing-type/:EdID', async (req, res) => {
   try {
     const query = `
       UPDATE EditingType
-      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
+      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTs = NOW()
       WHERE EdID = ?
     `;
     const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy, EdID]);
@@ -5716,7 +5716,7 @@ app.put('/api/editing-status/:EdID', async (req, res) => {
   try {
     const query = `
       UPDATE EditingType
-      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW()
+      SET EdType = ?, AudioVideo = ?, LastModifiedBy = ?, LastModifiedTs = NOW()
       WHERE EdID = ?
     `;
     const [result] = await db.query(query, [EdType, AudioVideo, LastModifiedBy, EdID]);
