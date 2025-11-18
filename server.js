@@ -586,9 +586,15 @@ app.put('/api/events/:EventID', async (req, res) => {
     }
 
     res.status(200).json({ message: "Event updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/events/:EventID:", err);
-    res.status(500).json({ error: "Failed to update Event." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -1122,9 +1128,15 @@ const SegmentCategory = req.body['Segment Category'];
     res.status(200).json({
       message: "Record updated successfully for Formal view."
     });
-  } catch (err) {
-    console.error("❌ Database error on /api/newmedialog/formal PUT:", err);
-    res.status(500).json({ error: "Failed to update record." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -1522,9 +1534,15 @@ const SegmentCategory = req.body['Segment Category'];
     res.status(200).json({
       message: "Record updated successfully for All Except Satsang view."
     });
-  } catch (err) {
-    console.error("❌ Database error on /api/newmedialog/all-except-satsang PUT:", err);
-    res.status(500).json({ error: "Failed to update record." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -1970,8 +1988,14 @@ const SegmentCategory = req.body['Segment Category'];
 
     res.status(200).json({ message: "Satsang Extracted Clip record updated successfully." });
   } catch (err) {
-    console.error("❌ Database error on /api/newmedialog/satsang-extracted-clips PUT:", err);
-    res.status(500).json({ error: "Failed to update Satsang Extracted Clip record." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -1999,7 +2023,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
       // From DigitalRecordings / Events
       'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
-      'EventName','EventCode','Yr','fkEventCategory',
+      'EventName','EventCode','Yr','NewEventCategory',
       // UI computed
       'EventName - EventCode'
     ];
@@ -2016,7 +2040,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
-      fkEventCategory: 'e',
+      NewEventCategory: 'e',
       LastModifiedTimestamp: 'nml',
       LastModifiedBy: 'nml'
     };
@@ -2077,7 +2101,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
       LEFT JOIN EventCategory AS ec
-        ON e.fkEventCategory = ec.EventCategoryID
+        ON e.NewEventCategory = ec.EventCategoryID
       ${finalWhere}
     `;
     const [[{ total }]] = await db.query(countQuery, finalParams);
@@ -2140,7 +2164,7 @@ app.get('/api/newmedialog/satsang-category', async (req, res) => {
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
-        e.fkEventCategory AS fkEventCategory,             -- ✅ Added Event FK
+        e.NewEventCategory AS NewEventCategory,             -- ✅ Added Event FK
         ec.EventCategory AS EventCategoryName,            -- ✅ Added category name
         CONCAT(
           COALESCE(e.EventName, ''),
@@ -2168,7 +2192,7 @@ END) AS ContentFromDetailCity
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
       LEFT JOIN EventCategory AS ec
-        ON e.fkEventCategory = ec.EventCategoryID        -- ✅ Join EventCategory table
+        ON e.NewEventCategory = ec.EventCategoryID        -- ✅ Join EventCategory table
       ${finalWhere}
       ${orderByString}
       LIMIT ? OFFSET ?
@@ -2308,9 +2332,15 @@ const SegmentCategory = req.body['Segment Category'];
     }
 
     res.status(200).json({ message: "Satsang Category record updated successfully." });
-  } catch (err) {
-    console.error("❌ Database error on /api/newmedialog/satsang-category/:MLUniqueID:", err);
-    res.status(500).json({ error: "Failed to update Satsang Category record." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -2700,9 +2730,15 @@ app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
     }
 
     res.status(200).json({ message: "Media Log updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/newmedialog/:MLUniqueID:", err);
-    res.status(500).json({ error: "Failed to update Media Log." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -3160,8 +3196,14 @@ app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
 
     res.status(200).json({ message: "Digital Recording updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/digitalrecording/:RecordingCode:", err);
-    res.status(500).json({ error: "Failed to update Digital Recording." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINTS FOR AUXFILES TABLE ---
@@ -3354,8 +3396,14 @@ app.put('/api/auxfiles/:new_auxid', async (req, res) => {
 
     res.status(200).json({ message: "Aux file updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/auxfiles/:new_auxid:", err);
-    res.status(500).json({ error: "Failed to update Aux file." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 }); 
 // --- ENDPOINTS FOR SINGLE RECORDS ---
@@ -4557,8 +4605,14 @@ app.put('/api/users/:id/permissions', async (req, res) => {
 
     res.status(200).json({ message: 'Permissions updated successfully.' });
   } catch (err) {
-    console.error("Error updating permissions:", err);
-    res.status(500).json({ error: "Failed to update permissions." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -4735,9 +4789,15 @@ app.put('/api/audio/:AID', async (req, res) => {
     }
 
     res.status(200).json({ message: "Audio updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/audio/:AID:", err);
-    res.status(500).json({ error: "Failed to update Audio." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -4893,7 +4953,7 @@ app.get('/api/bhajan-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/bhajantype/:BTID', async (req, res) => {
+app.put('/api/bhajan-type/:BTID', async (req, res) => {
   const { BTID } = req.params;
   const { BhajanName, LastModifiedBy } = req.body;
 
@@ -4922,8 +4982,14 @@ app.put('/api/bhajantype/:BTID', async (req, res) => {
 
     res.status(200).json({ message: "BhajanName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/bhajantype/:BTID:", err);
-    res.status(500).json({ error: "Failed to update BhajanName." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -5100,8 +5166,14 @@ app.put('/api/digital-master-category/:DMCID', async (req, res) => {
     }
     res.status(200).json({ message: "DMCategory_name updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/digital-master-category/:DMCID:", err);
-    res.status(500).json({ error: "Failed to update DMCategory_name." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -5278,8 +5350,14 @@ app.put('/api/distribution-label/:LabelID', async (req, res) => {
     }
     res.status(200).json({ message: "LabelName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/distribution-label/:LabelID:", err);
-    res.status(500).json({ error: "Failed to update LabelName." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -5460,8 +5538,14 @@ app.put('/api/editing-type/:EdID', async (req, res) => {
     }
     res.status(200).json({ message: "Editing Type updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/editing-type/:EdID:", err);
-    res.status(500).json({ error: "Failed to update Editing Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -5495,8 +5579,14 @@ app.post('/api/editing-type', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/editing-type:", err);
-    res.status(500).json({ error: "Failed to add Editing Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
@@ -5634,9 +5724,15 @@ app.put('/api/editing-status/:EdID', async (req, res) => {
       return res.status(404).json({ error: `Editing Status with ID ${EdID} not found.` });
     }
     res.status(200).json({ message: "Editing Status updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/editing-status/:EdID:", err);
-    res.status(500).json({ error: "Failed to update Editing Status." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -5812,8 +5908,14 @@ app.put('/api/event-category/:EventCategoryID', async (req, res) => {
     }
     res.status(200).json({ message: "Event Category updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/event-category/:EventCategoryID:", err);
-    res.status(500).json({ error: "Failed to update Event Category." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6018,8 +6120,14 @@ app.put('/api/footage-type/:FootageID', async (req, res) => {
     }
     res.status(200).json({ message: "Footage Type updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/footage-type/:FootageID:", err);
-    res.status(500).json({ error: "Failed to update Footage Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6164,8 +6272,14 @@ app.put('/api/format-type/:FTID', async (req, res) => {
     }
     res.status(200).json({ message: "Type updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/formattype/:FTID:", err);
-    res.status(500).json({ error: "Failed to update Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6342,8 +6456,14 @@ app.put('/api/granths/:ID', async (req, res) => {
     }
     res.status(200).json({ message: "Name updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/granths/:ID:", err);
-    res.status(500).json({ error: "Failed to update Name." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6514,8 +6634,14 @@ app.put('/api/language/:STID', async (req, res) => {
     }
     res.status(200).json({ message: "TitleLanguage updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/language/:STID:", err);
-    res.status(500).json({ error: "Failed to update TitleLanguage." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6688,8 +6814,14 @@ app.put('/api/master-quality/:MQID', async (req, res) => {
     }
     res.status(200).json({ message: "MQName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/master-quality/:MQID:", err);
-    res.status(500).json({ error: "Failed to update MQName." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6862,8 +6994,14 @@ app.put('/api/organizations/:OrganizationID', async (req, res) => {
     }
     res.status(200).json({ message: "Organization updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/organizations/:OrganizationID:", err);
-    res.status(500).json({ error: "Failed to update Organization." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7038,8 +7176,14 @@ app.put('/api/new-event-category/:SrNo', async (req, res) => {
     }
     res.status(200).json({ message: "NewEventCategoryName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/new-event-category/:SrNo:", err);
-    res.status(500).json({ error: "Failed to update NewEventCategoryName." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7212,8 +7356,14 @@ app.put('/api/new-cities/:CityID', async (req, res) => {
     }
     res.status(200).json({ message: "City updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/new-cities/:CityID:", err);
-    res.status(500).json({ error: "Failed to update City." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7385,9 +7535,15 @@ app.put('/api/new-countries/:CountryID', async (req, res) => {
       return res.status(404).json({ error: `Country with ID ${CountryID} not found.` });
     }
     res.status(200).json({ message: "Country updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/new-countries/:CountryID:", err);
-    res.status(500).json({ error: "Failed to update Country." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7558,8 +7714,14 @@ app.put('/api/new-states/:StateID', async (req, res) => {
     }
     res.status(200).json({ message: "State updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/newstates/:StateID:", err);
-    res.status(500).json({ error: "Failed to update State." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7731,8 +7893,14 @@ app.put('/api/occasions/:OccasionID', async (req, res) => {
     }
     res.status(200).json({ message: "Occasion updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/occasions/:OccasionID:", err);
-    res.status(500).json({ error: "Failed to update Occasion." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7929,8 +8097,14 @@ app.put('/api/topic-number-source/:TNID', async (req, res) => {
     }
     res.status(200).json({ message: "TNName updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/topic-number-source/:TNID:", err);
-    res.status(500).json({ error: "Failed to update TNName." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -8196,8 +8370,14 @@ app.put('/api/time-of-day/:TimeID', async (req, res) => {
 
     res.status(200).json({ message: "Time of Day updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/time-of-day/:TimeID:", err);
-    res.status(500).json({ error: "Failed to update Time of Day." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -8377,9 +8557,15 @@ app.put('/api/aux-file-type/:AuxTypeID', async (req, res) => {
     }
 
     res.status(200).json({ message: "AuxFileType updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/aux-file-type/:AuxTypeID:", err);
-    res.status(500).json({ error: "Failed to update AuxFileType." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -8727,9 +8913,15 @@ app.put('/api/topic-given-by/:TGBID', async (req, res) => {
     }
 
     res.status(200).json({ message: "Topic Given By updated successfully." });
-  } catch (err) {
-    console.error("❌ Database query error on /api/topic-given-by/:TGBID:", err);
-    res.status(500).json({ error: "Failed to update Topic Given By." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -8910,8 +9102,14 @@ app.put('/api/segment-category/:SegCatID', async (req, res) => {
 
     res.status(200).json({ message: "Segment Category updated successfully." });
   } catch (err) {
-    console.error("❌ Database query error on /api/segment-category/:SegCatID:", err);
-    res.status(500).json({ error: "Failed to update Segment Category." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
