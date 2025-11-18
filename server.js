@@ -3257,7 +3257,7 @@ app.get('/api/auxfiles', async (req, res) => {
     console.error("❌ Database query error on /api/auxfiles:", err);
     res.status(500).json({ error: 'Database query failed' });
   }
-});
+}); 
 
 
 app.get('/api/auxfiles/export', async (req, res) => {
@@ -7795,6 +7795,41 @@ app.get('/api/number-source/options', async (req, res) => {
   }
 });
 
+app.get('/api/number/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT Number
+      FROM NewMediaLog
+      WHERE Number IS NOT NULL AND TRIM(Number) <> ''
+    `;
+    const [rows] = await db.query(query);
+
+    const allNumbers = new Set();
+    rows.forEach(row => {
+      if (row.Number) {
+        row.Number.split(',')
+          .map(n => n.trim())
+          .filter(n => n !== '')
+          .forEach(n => allNumbers.add(n));
+      }
+    });
+
+    const uniqueNumbers = Array.from(allNumbers).sort((a, b) => {
+      // numeric sort if both values are numbers
+      const numA = parseFloat(a);
+      const numB = parseFloat(b);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.localeCompare(b); // fallback to string sort
+    });
+
+    const results = uniqueNumbers.map(n => ({ Number: n }));
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("❌ Database query error on /api/number/options:", err);
+    res.status(500).json({ error: 'Failed to fetch number options.' });
+  }
+});
 
 app.get('/api/topic-source/options', async (req, res) => {
   try {
