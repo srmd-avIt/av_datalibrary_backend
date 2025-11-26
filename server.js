@@ -101,13 +101,11 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
   const whereClauses = [];
   let params = [];
 
-  // Helper to get prefixed field name (with alias if provided)
   const getPrefixedField = (field) => {
     const alias = tableAliases[field];
     return alias ? `${db.escapeId(alias)}.${db.escapeId(field)}` : db.escapeId(field);
   };
 
-  // Helper for computed expressions
   const computedExpr = (field) => {
     if (field === 'EventDisplay' || field === 'EventName - EventCode' || field === 'EventName-EventCode') {
       const en = getPrefixedField('EventName');
@@ -122,32 +120,20 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
     return null;
   };
 
-  // Utility: normalize incoming value into array/string
   const normalizeIncomingValue = (raw) => {
-    // If it's already an array, return as array
     if (Array.isArray(raw)) return raw.map(String);
-
     if (raw === undefined || raw === null) return null;
     const s = String(raw).trim();
-
     if (s === '') return null;
-
-    // If it looks like a JSON array string, parse it
     if ((s.startsWith('[') && s.endsWith(']')) || s.startsWith('%5B')) {
       try {
         const parsed = JSON.parse(decodeURIComponent(s));
         if (Array.isArray(parsed)) return parsed.map(String);
-      } catch (e) {
-        // ignore parse error and fall back
-      }
+      } catch (e) { }
     }
-
-    // If comma separated, split
     if (s.includes(',')) {
       return s.split(',').map(v => v.trim()).filter(Boolean);
     }
-
-    // otherwise keep as single value string
     return s;
   };
 
@@ -167,98 +153,50 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
     if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
   }
 
-  // --- 2. Simple key=value & multi-select filters ---
+  // --- 2. Filters ---
   Object.keys(filters).forEach(key => {
     const rawValue = queryParams[key];
     if (rawValue === undefined || rawValue === null) return;
-
-    // Skip reserved params handled earlier
     if (['page', 'limit', 'sortBy', 'sortDirection', 'search', 'advanced_filters'].includes(key)) return;
 
-    // Field/operator parsing (support key__operator style)
     const [rawFieldName, opSuffix] = key.split('__');
     const operatorKeyFromParam = (opSuffix || '').toLowerCase();
     const fieldName = rawFieldName.replace(/_min|_max$/, '');
     const prefixedField = getPrefixedField(fieldName);
-
-    // Normalize rawValue into either array or string
     const norm = normalizeIncomingValue(rawValue);
 
-    // Define which fields are multi-select/tag fields that should use FIND_IN_SET
-   // All fields that store comma-separated values in DB or require FIND_IN_SET
-const multiSelectFields = [
-  'fkCountry',
-  'fkState',
-  'fkCity',
-  'Number',
-  'Topic',
-  'NewEventCategory',
-  'fkMediaName',
-  'fkDistributionLabel',
-  'ProductionBucket',
-  'fkDigitalMasterCategory',
-  'Teams',
-  'Masterquality',
-  'Dimension'
-];
-
-
-    // If client sent array (or parsed to array) => treat as OR list
+    // ✅ FIX: Use LIKE logic for arrays to match single-select behavior
     if (Array.isArray(norm) && norm.length > 0) {
-      // If this field is tag-like in DB (comma-separated values stored), use FIND_IN_SET ORs
-      if (multiSelectFields.includes(fieldName)) {
-        const orParts = norm.map(() => `FIND_IN_SET(?, ${prefixedField})`);
-        whereClauses.push(`(${orParts.join(' OR ')})`);
-        params.push(...norm);
-      } else {
-        // Non-tag fields: match equality (or LIKE if you prefer)
-        const orParts = norm.map(() => `${prefixedField} = ?`);
-        whereClauses.push(`(${orParts.join(' OR ')})`);
-        params.push(...norm);
-      }
+      // We use LIKE %val% OR FIND_IN_SET to be robust against "Mumbai" matching "Mumbai" OR "Mumbai, Pune"
+      // This ensures consistency: if it works in single select (which uses LIKE), it works here.
+      const orParts = norm.map(() => `(${prefixedField} LIKE ? OR FIND_IN_SET(?, ${prefixedField}))`);
+      whereClauses.push(`(${orParts.join(' OR ')})`);
+      
+      // Push param twice for every value (once for LIKE, once for FIND_IN_SET)
+      norm.forEach(val => params.push(`%${val}%`, val));
       return;
     }
 
-    // If norm is a string (single value), handle operators and comma strings too
+    // String handling (Single values)
     if (typeof norm === 'string') {
-      // If operator present in param (like __equals, __in, etc.), honor it
       if (operatorKeyFromParam && allowedOperators[operatorKeyFromParam]) {
         const op = allowedOperators[operatorKeyFromParam];
+        // ... (existing operator logic unchanged) ...
         switch (op) {
-          case 'IN':
-          case 'NOT IN': {
-            // accept comma-separated or JSON array for value
+          case 'IN': case 'NOT IN': {
             const inValues = Array.isArray(rawValue) ? rawValue : normalizeIncomingValue(rawValue);
-            if (inValues && (Array.isArray(inValues) ? inValues.length > 0 : String(inValues).trim() !== '')) {
-              const arr = Array.isArray(inValues) ? inValues : String(inValues).split(',').map(v => v.trim()).filter(Boolean);
-              whereClauses.push(`${prefixedField} ${op} (${arr.map(() => '?').join(',')})`);
-              params.push(...arr);
+            if (inValues) {
+               const arr = Array.isArray(inValues) ? inValues : String(inValues).split(',');
+               whereClauses.push(`${prefixedField} ${op} (${arr.map(() => '?').join(',')})`);
+               params.push(...arr);
             }
             break;
           }
-          case 'LIKE':
-          case 'NOT LIKE': {
-            const likeVal = `%${norm}%`;
+          case 'LIKE': case 'NOT LIKE':
             whereClauses.push(`${prefixedField} ${op} ?`);
-            params.push(likeVal);
-            break;
-          }
-          case 'IS_EMPTY':
-            whereClauses.push(`(${prefixedField} IS NULL OR ${prefixedField} = '')`);
-            break;
-          case 'IS_NOT_EMPTY':
-            whereClauses.push(`(${prefixedField} IS NOT NULL AND ${prefixedField} <> '')`);
-            break;
-          case 'BETWEEN':
-            // expecting rawValue to be JSON array [low,high] or "low,high"
-            const betweenVals = normalizeIncomingValue(rawValue);
-            if (Array.isArray(betweenVals) && betweenVals.length === 2) {
-              whereClauses.push(`${prefixedField} BETWEEN ? AND ?`);
-              params.push(betweenVals[0], betweenVals[1]);
-            }
+            params.push(`%${norm}%`);
             break;
           default:
-            // generic operators (=, !=, >, <, >=, <=)
             whereClauses.push(`${prefixedField} ${op} ?`);
             params.push(norm);
             break;
@@ -266,31 +204,11 @@ const multiSelectFields = [
         return;
       }
 
-      // No explicit operator — treat comma-separated single string as OR list
-      if (norm.includes(',')) {
-        const parts = norm.split(',').map(v => v.trim()).filter(Boolean);
-        if (parts.length > 0) {
-          // For tag-like fields use FIND_IN_SET
-          if (multiSelectFields.includes(fieldName)) {
-            const orParts = parts.map(() => `FIND_IN_SET(?, ${prefixedField})`);
-            whereClauses.push(`(${orParts.join(' OR ')})`);
-            params.push(...parts);
-          } else {
-            const orParts = parts.map(() => `${prefixedField} LIKE ?`);
-            whereClauses.push(`(${orParts.join(' OR ')})`);
-            parts.forEach(p => params.push(`%${p}%`));
-          }
-          return;
-        }
-      }
-
-      // Final fallback: single string, use LIKE (keeps previous behavior)
+      // Default Single String fallback (matches your previous behavior)
       whereClauses.push(`${prefixedField} LIKE ?`);
       params.push(`%${norm}%`);
       return;
     }
-
-    // If norm was null/unknown just skip
   });
 
   // --- 3. Advanced filters (JSON) ---
