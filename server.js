@@ -209,7 +209,7 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
       params.push(`%${norm}%`);
       return;
     }
-  });
+  }); 
 
   // --- 3. Advanced filters (JSON) ---
   if (advanced_filters) {
@@ -301,59 +301,27 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
 
 // ✅ REPLACEMENT for your buildOrderByClause function
 // ✅ REPLACEMENT for your buildOrderByClause function
-const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}, dateColumns = [], numericColumns = [], naturalSortColumns = []) => {
+const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {}) => {
   let { sortBy, sortDirection } = queryParams;
+  if (!sortBy || sortBy === 'none') return '';
 
-  if (!sortBy || sortBy === 'none') {
-    return '';
-  }
-
-  const sortFields = sortBy.split(',').map(field => field.trim());
-  // --- MODIFIED: Handle per-field sort directions ---
-  const sortDirections = (sortDirection || '').split(',').map(dir => (String(dir).toUpperCase() === 'DESC' ? 'DESC' : 'ASC'));
+  const sortFields = sortBy.split(',').map(f => f.trim());
+  const sortDirections = (sortDirection || '').split(',');
 
   const orderByParts = sortFields.map((field, index) => {
-    if (!allowedColumns.includes(field)) {
-      console.warn(`⚠️ Sort field '${field}' not in allowed list, skipping.`);
-      return null;
-    }
+    if (!allowedColumns.includes(field)) return null;
     
-    // Use the specific direction for this field, or fallback to the first direction
-    const direction = sortDirections[index] || sortDirections[0] || 'ASC';
-
+    const direction = (sortDirections[index] || sortDirections[0] || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
     const alias = tableAliases[field];
-    const prefixedField = alias
-      ? `${db.escapeId(alias)}.${db.escapeId(field)}`
-      : db.escapeId(field);
+    const prefixedField = alias ? `${db.escapeId(alias)}.${db.escapeId(field)}` : db.escapeId(field);
 
-    let sortExpression = prefixedField;
-
-    if (dateColumns.includes(field)) {
-      sortExpression = `STR_TO_DATE(${prefixedField}, '%d-%m-%Y')`;
-    } else if (numericColumns.includes(field)) {
-      sortExpression = `CAST(${prefixedField} AS UNSIGNED)`;
-    } else if (naturalSortColumns.includes(field)) {
-      // Enhanced Natural Sort:
-      // 1. Prioritize purely numeric strings first.
-      // 2. Then sort alphanumeric strings by their text and number parts.
-      const isNumeric = `CASE WHEN ${prefixedField} REGEXP '^[0-9]+$' THEN 0 ELSE 1 END`;
-      const textPart = `REGEXP_SUBSTR(${prefixedField}, '^[a-zA-Z_\\\\-]+')`;
-      const numPart = `CAST(REGEXP_SUBSTR(${prefixedField}, '[0-9]+$') AS UNSIGNED)`;
-      
-      // The direction applies to all parts to keep them together
-      return `${isNumeric} ${direction}, ${textPart} ${direction}, ${numPart} ${direction}`;
-    }
-
-    // Append the direction to each field
-    return `${sortExpression} ${direction}`;
+    // PERFORMANCE FIX: 
+    // Removed regex sorting. It kills performance on large datasets.
+    // If you need natural sort, store a "sort_order" integer column in DB.
+    return `${prefixedField} ${direction}`;
   }).filter(Boolean);
 
-  if (orderByParts.length > 0) {
-    // The direction is now part of each part, so we just join them
-    return `ORDER BY ${orderByParts.join(', ')}`;
-  }
-
-  return '';
+  return orderByParts.length > 0 ? `ORDER BY ${orderByParts.join(', ')}` : '';
 };
 
 
@@ -699,6 +667,7 @@ app.get('/api/newmedialog/formal', async (req, res) => {
      IsInformal: 'nml',
      IsAudioRecorded: 'nml',
     LastModifiedTimestamp: 'nml',
+    LastModifiedBy: 'nml',
      PreservationStatus: 'dr',
      RecordingCode: 'dr',
      RecordingName: 'dr',
