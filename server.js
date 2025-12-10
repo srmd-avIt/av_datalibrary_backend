@@ -4503,7 +4503,7 @@ app.put('/api/users/:id/permissions', async (req, res) => {
 
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `Sheet1!K${sheetRowNumber}`, // Update cell in Column K for the correct row
+      range: `Sheet1!K${sheetRowNumber}`, // Update cell in Column J for the correct row
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [[permissionsString]],
