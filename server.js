@@ -143,12 +143,12 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
     searchFields.forEach(field => {
       const expr = computedExpr(field);
       if (expr) {
-        searchConditions.push(`${expr} LIKE ?`);
-        params.push(`%${search}%`);
-      } else {
-        searchConditions.push(`${getPrefixedField(field)} LIKE ?`);
-        params.push(`%${search}%`);
-      }
+  searchConditions.push(`${expr} = ?`);
+  params.push(search);
+} else {
+  searchConditions.push(`${getPrefixedField(field)} = ?`);
+  params.push(search);
+}
     });
     if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
   }
