@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-
+const jwt = require('jsonwebtoken');
 const allowedOrigins = [
   "https://av-datalibrary-frontend.vercel.app", // Your frontend domain
   "http://localhost:3000",  // Add this for local development
@@ -65,6 +65,32 @@ async function sendInvitationEmail({ email, role, teams, message, appLink }) {
 
   return transporter.sendMail(mailOptions);
 }
+
+// --- JWT CONFIGURATION ---
+const JWT_SECRET = process.env.JWT_SECRET; 
+
+// Helper to create a token
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user.id, email: user.email, role: user.role, permissions: user.permissions },
+    JWT_SECRET,
+    { expiresIn: '2h' } // Token lasts 2 hours
+  );
+};
+
+// Middleware to verify token on protected routes
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.status(401).json({ error: "Access denied. Please log in." });
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ error: "Session expired. Please log in again." });
+    req.user = decoded; // Now req.user has the user's email, role, etc.
+    next();
+  });
+};
 
 app.post('/send-invitation', async (req, res) => {
   const { email, role, teams, message, appLink } = req.body;
@@ -138,78 +164,68 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
   };
 
   // --- 1. Global search ---
-  if (search && searchFields.length > 0) {
-    const searchConditions = [];
-    searchFields.forEach(field => {
-      const expr = computedExpr(field);
-      if (expr) {
-  searchConditions.push(`${expr} = ?`);
-  params.push(search);
-} else {
-  searchConditions.push(`${getPrefixedField(field)} = ?`);
-  params.push(search);
+ // ...existing code...
+// --- 1. Global search ---
+if (search && searchFields.length > 0) {
+  const searchConditions = [];
+  searchFields.forEach(field => {
+    const expr = computedExpr(field);
+    if (expr) {
+      searchConditions.push(`${expr} = ?`);
+      params.push(search);
+    } else {
+      searchConditions.push(`${getPrefixedField(field)} = ?`);
+      params.push(search);
+    }
+  });
+  if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
 }
-    });
-    if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
-  }
+// ...existing code...
 
   // --- 2. Filters ---
   Object.keys(filters).forEach(key => {
-    const rawValue = queryParams[key];
-    if (rawValue === undefined || rawValue === null) return;
-    if (['page', 'limit', 'sortBy', 'sortDirection', 'search', 'advanced_filters'].includes(key)) return;
+  const rawValue = queryParams[key];
+  if (rawValue === undefined || rawValue === null) return;
+  if (['page', 'limit', 'sortBy', 'sortDirection', 'search', 'advanced_filters'].includes(key)) return;
 
-    const [rawFieldName, opSuffix] = key.split('__');
-    const operatorKeyFromParam = (opSuffix || '').toLowerCase();
-    const fieldName = rawFieldName.replace(/_min|_max$/, '');
-    const prefixedField = getPrefixedField(fieldName);
-    const norm = normalizeIncomingValue(rawValue);
+  const [rawFieldName, opSuffix] = key.split('__');
+  const fieldName = rawFieldName.replace(/_min|_max$/, '');
+  const prefixedField = getPrefixedField(fieldName);
+  const norm = normalizeIncomingValue(rawValue);
 
-    // ✅ FIX: Use LIKE logic for arrays to match single-select behavior
+  // ✅ SPECIAL LOGIC FOR EXACT MATCH FIELDS (e.g., Number)
+  if (fieldName === 'Number') {
     if (Array.isArray(norm) && norm.length > 0) {
-      // We use LIKE %val% OR FIND_IN_SET to be robust against "Mumbai" matching "Mumbai" OR "Mumbai, Pune"
-      // This ensures consistency: if it works in single select (which uses LIKE), it works here.
-      const orParts = norm.map(() => `(${prefixedField} LIKE ? OR FIND_IN_SET(?, ${prefixedField}))`);
-      whereClauses.push(`(${orParts.join(' OR ')})`);
-      
-      // Push param twice for every value (once for LIKE, once for FIND_IN_SET)
-      norm.forEach(val => params.push(`%${val}%`, val));
+      // Use IN for multiple exact selections
+      whereClauses.push(`${prefixedField} IN (${norm.map(() => '?').join(',')})`);
+      params.push(...norm);
       return;
     }
-
-    // String handling (Single values)
-    if (typeof norm === 'string') {
-      if (operatorKeyFromParam && allowedOperators[operatorKeyFromParam]) {
-        const op = allowedOperators[operatorKeyFromParam];
-        // ... (existing operator logic unchanged) ...
-        switch (op) {
-          case 'IN': case 'NOT IN': {
-            const inValues = Array.isArray(rawValue) ? rawValue : normalizeIncomingValue(rawValue);
-            if (inValues) {
-               const arr = Array.isArray(inValues) ? inValues : String(inValues).split(',');
-               whereClauses.push(`${prefixedField} ${op} (${arr.map(() => '?').join(',')})`);
-               params.push(...arr);
-            }
-            break;
-          }
-          case 'LIKE': case 'NOT LIKE':
-            whereClauses.push(`${prefixedField} ${op} ?`);
-            params.push(`%${norm}%`);
-            break;
-          default:
-            whereClauses.push(`${prefixedField} ${op} ?`);
-            params.push(norm);
-            break;
-        }
-        return;
-      }
-
-      // Default Single String fallback (matches your previous behavior)
-      whereClauses.push(`${prefixedField} LIKE ?`);
-      params.push(`%${norm}%`);
+    if (typeof norm === 'string' && norm !== '') {
+      // Use = instead of LIKE for exact match
+      whereClauses.push(`${prefixedField} = ?`);
+      params.push(norm);
       return;
     }
-  }); 
+    return;
+  }
+
+  // ✅ KEEP LIKE LOGIC FOR OTHER FIELDS (City, Topic, etc.)
+  if (Array.isArray(norm) && norm.length > 0) {
+    const orParts = norm.map(() => `(${prefixedField} LIKE ? OR FIND_IN_SET(?, ${prefixedField}))`);
+    whereClauses.push(`(${orParts.join(' OR ')})`);
+    norm.forEach(val => params.push(`%${val}%`, val));
+    return;
+  }
+
+  if (typeof norm === 'string') {
+    // ... existing operator logic (starts_with, contains, etc.) ...
+    // If no specific operator suffix, default to LIKE
+    whereClauses.push(`${prefixedField} LIKE ?`);
+    params.push(`%${norm}%`);
+    return;
+  }
+});
 
   // --- 3. Advanced filters (JSON) ---
   if (advanced_filters) {
@@ -324,10 +340,123 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {})
   return orderByParts.length > 0 ? `ORDER BY ${orderByParts.join(', ')}` : '';
 };
 
+app.get('/api/non-event-production', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
 
+    const filterableColumns = [
+      "SMCode", "PostingDate", "Teams", "DistributionPlatforms", "Bucket", "Language", "SpecialDay",
+      "Duration", "First3Words", "Last3Words", "PostingMonth", "SMSubtitle?", "PostedLink", "Asset",
+      "PostName", "CreatedTimestamp", "AuxFiles", "SMFilesize", "Remarks"
+    ];
+
+    const { whereString, params } = buildWhereClause(
+      req.query,
+      filterableColumns, // global search fields
+      filterableColumns
+    );
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns);
+
+    // Count query
+    const countQuery = `SELECT COUNT(*) as total FROM SMPosts ${whereString}`;
+    const [[{ total }]] = await db.query(countQuery, params);
+    const totalPages = Math.ceil(total / limit);
+
+    // Data query
+    const dataQuery = `
+      SELECT * FROM SMPosts
+      ${whereString}
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: { page, limit, totalItems: total, totalPages }
+    });
+  } catch (err) {
+    console.error("❌ DB Error on /api/non-event-production:", err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
+});
+
+
+// ...existing code...
+app.put('/api/non-event-production/:SMCode', authenticateToken, async (req, res) => {
+  const { SMCode } = req.params;
+  const data = req.body;
+
+  // Access the value for the tricky column name
+  const smSubtitleValue = data["SMSubtitle?"];
+
+  if (!SMCode) return res.status(400).json({ error: "SMCode is required." });
+
+  try {
+    const query = `
+      UPDATE SMPosts SET
+        PostingDate = ?,
+        Teams = ?,
+        DistributionPlatforms = ?,
+        Bucket = ?,
+        Language = ?,
+        SpecialDay = ?,
+        Duration = ?,
+        First3Words = ?,
+        Last3Words = ?,
+        PostingMonth = ?,
+        ?? = ?,
+        PostedLink = ?,
+        Asset = ?,
+        PostName = ?,
+        CreatedTimestamp = ?,
+        AuxFiles = ?,
+        SMFilesize = ?,
+        Remarks = ?
+      WHERE SMCode = ?
+    `;
+
+    const params = [
+      data.PostingDate || null,
+      data.Teams || null,
+      data.DistributionPlatforms || null,
+      data.Bucket || null,
+      data.Language || null,
+      data.SpecialDay || null,
+      data.Duration || null,
+      data.First3Words || null,
+      data.Last3Words || null,
+      data.PostingMonth || null,
+      "SMSubtitle?",     // Matches the ?? placeholder
+      smSubtitleValue,   // Matches the = ? placeholder
+      data.PostedLink || null,
+      data.Asset || null,
+      data.PostName || null,
+      data.CreatedTimestamp || null,
+      data.AuxFiles || null,
+      data.SMFilesize || null,
+      data.Remarks || null,
+      SMCode
+    ];
+
+    const [result] = await db.query(query, params);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "No record updated (SMCode not found)." });
+    }
+    res.status(200).json({ message: "Non Event Production record updated successfully." });
+  } catch (err) {
+    console.error("❌ DB Error on PUT /api/non-event-production/:SMCode:", err);
+    res.status(500).json({ error: 'Database query failed', message: err.message });
+  }
+});
+// ...existing code...
 // --- Events Endpoint ---
 // --- Events Endpoint ---
-app.get('/api/events', async (req, res) => {
+app.get('/api/events',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -431,7 +560,7 @@ app.get('/api/events/export', async (req, res) => {
 });
 
 
-app.put('/api/events/:EventID', async (req, res) => {
+app.put('/api/events/:EventID',authenticateToken, async (req, res) => {
   const { EventID } = req.params;
   // Destructure all editable fields from the request body
   const {
@@ -505,7 +634,7 @@ app.put('/api/events/:EventID', async (req, res) => {
 
 // --- NewMediaLog Endpoints ---
 // --- NewMediaLog Endpoints ---
-app.get('/api/newmedialog', async (req, res) => {
+app.get('/api/newmedialog',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -639,7 +768,7 @@ END) AS ContentFromDetailCity
 
 
 // ...existing code...
-app.get('/api/newmedialog/formal', async (req, res) => {
+app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -945,7 +1074,7 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
 });
 
 
-app.put('/api/newmedialog/formal/:MLUniqueID', async (req, res) => {
+app.put('/api/newmedialog/formal/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
   const {
@@ -1050,7 +1179,7 @@ const SegmentCategory = req.body['Segment Category'];
 // server.js
 
 // ...existing code...
-app.get('/api/newmedialog/all-except-satsang', async (req, res) => {
+app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -1357,7 +1486,7 @@ app.get('/api/newmedialog/all-except-satsang/export', async (req, res) => {
   }
 });
 
-app.put('/api/newmedialog/all-except-satsang/:MLUniqueID', async (req, res) => {
+app.put('/api/newmedialog/all-except-satsang/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
   const {
@@ -1455,7 +1584,7 @@ const SegmentCategory = req.body['Segment Category'];
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 // ...existing code...
 // ...existing code...
-app.get('/api/newmedialog/satsang-extracted-clips', async (req, res) => {
+app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -1816,7 +1945,7 @@ app.get('/api/newmedialog/satsang-extracted-clips/export', async (req, res) => {
   }
 });
 
-app.put('/api/newmedialog/satsang-extracted-clips/:MLUniqueID', async (req, res) => {
+app.put('/api/newmedialog/satsang-extracted-clips/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
   const {
@@ -1908,7 +2037,7 @@ const SegmentCategory = req.body['Segment Category'];
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 
 // ...existing code...
-app.get('/api/newmedialog/satsang-category', async (req, res) => {
+app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -2171,7 +2300,7 @@ app.get('/api/newmedialog/satsang-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/newmedialog/satsang-category/:MLUniqueID', async (req, res) => {
+app.put('/api/newmedialog/satsang-category/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
   const {
@@ -2250,7 +2379,7 @@ const SegmentCategory = req.body['Segment Category'];
 
 
 // --- Google Sheet: ML Formal Pending ---
-app.get("/api/google-sheet/ml-formal-pending", async (req, res) => {
+app.get("/api/google-sheet/ml-formal-pending",authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -2520,7 +2649,7 @@ app.get('/api/newmedialog/export', async (req, res) => {
 });
 
 
-app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
+app.put('/api/newmedialog/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
   // Destructure all editable fields from the request body
   const {
@@ -2647,7 +2776,7 @@ app.put('/api/newmedialog/:MLUniqueID', async (req, res) => {
 });
 
 // --- NEW ENDPOINT for Edited Highlights ---
-app.get('/api/edited-highlights', async (req, res) => {
+app.get('/api/edited-highlights',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -2829,7 +2958,7 @@ app.get('/api/edited-highlights/export', async (req, res) => {
 });
 // --- UPGRADED DigitalRecording Endpoints ---
 // ...existing code...
-app.get('/api/digitalrecording', async (req, res) => {
+app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -3032,7 +3161,7 @@ app.get('/api/digitalrecording/export', async (req, res) => {
 });
 
 
-app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
+app.put('/api/digitalrecording/:RecordingCode', authenticateToken, async (req, res) => {
   const { RecordingCode } = req.params;
   const {
     fkEventCode, RecordingName, NoOfFiles, fkDigitalMasterCategory, fkMediaName,
@@ -3113,7 +3242,7 @@ app.put('/api/digitalrecording/:RecordingCode', async (req, res) => {
 // --- NEW ENDPOINTS FOR AUXFILES TABLE ---
 
 // Endpoint to get all records from the AuxFiles table
-app.get('/api/auxfiles', async (req, res) => {
+app.get('/api/auxfiles', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -3253,7 +3382,7 @@ app.get('/api/auxfiles/:fkMLID', async (req, res) => {
 
 
 
-app.put('/api/auxfiles/:new_auxid', async (req, res) => {
+app.put('/api/auxfiles/:new_auxid', authenticateToken, async (req, res) => {
   const { new_auxid } = req.params;
   const {
     AuxCode, AuxFileType, AuxLanguage, fkMLID, AuxTopic, NotesRemarks, GoogleDriveLink,
@@ -4235,6 +4364,11 @@ app.post("/api/send-invitation", async (req, res) => {
   }
 });
 
+
+
+
+
+
 // OAuth2 Configuration
 
 const createTransporter = async () => {
@@ -4311,7 +4445,7 @@ const formatPermissions = (permissionsArray) => {
 // ===================================================================================
 
 // --- GET ALL USERS ---
-app.get("/api/users", async (_req, res) => {
+app.get("/api/users", authenticateToken, async (_req, res) => {
   try {
     const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
     const result = await sheets.spreadsheets.values.get({
@@ -4341,7 +4475,7 @@ app.get("/api/users", async (_req, res) => {
 });
 
 // --- ADD A NEW USER ---
-app.post("/api/users", async (req, res) => {
+app.post("/api/users", authenticateToken, async (req, res) => {
   const { name, email, role, department, location, teams, permissions } = req.body;
 
   if (!name || !email || !role) {
@@ -4407,7 +4541,7 @@ app.post("/api/users", async (req, res) => {
 });
 
 // --- DELETE A USER ---
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id',  async (req, res) => {
   const { id } = req.params;
 
   if (!id) {
@@ -4525,22 +4659,21 @@ app.put('/api/users/:id/permissions', async (req, res) => {
 
 
 // ✅ THIS IS THE MODIFIED ENDPOINT
-app.get('/api/users/by-email/:email', async (req, res) => {
-  const userEmailToFind = req.params.email;
+// ✅ NEW LOGIN ENDPOINT
+app.post('/api/auth/login', async (req, res) => {
+  const { email } = req.body;
 
-  if (!userEmailToFind) {
-    return res.status(400).json({ error: "Email parameter is required." });
-  }
+  if (!email) return res.status(400).json({ error: "Email is required." });
 
   try {
     const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: "Sheet1!A2:K", // Ensure you are reading up to column K for permissions
+      range: "Sheet1!A2:K", 
     });
 
     const rows = result.data.values || [];
-    const userRow = rows.find(row => row[2] && row[2].toLowerCase() === userEmailToFind.toLowerCase());
+    const userRow = rows.find(row => row[2] && row[2].toLowerCase() === email.toLowerCase());
 
     if (userRow) {
       const user = {
@@ -4548,18 +4681,18 @@ app.get('/api/users/by-email/:email', async (req, res) => {
         name: userRow[1],
         email: userRow[2],
         role: userRow[3],
-        permissions: parsePermissions(userRow[10]), // Parse permissions from column K
+        permissions: parsePermissions(userRow[10]), 
       };
 
-      console.log(`✅ Authentication successful for: ${userEmailToFind}`);
-      res.status(200).json(user);
+      // Generate the Token
+      const token = generateToken(user);
+
+      res.status(200).json({ token, user });
     } else {
-      console.log(`❌ Authentication failed. User not found: ${userEmailToFind}`);
-      res.status(404).json({ error: 'User not found in application registry. Please contact admin.' });
+      res.status(404).json({ error: 'User not registered. Contact admin.' });
     }
   } catch (err) {
-    console.error("Error looking up user by email from Google Sheet:", err);
-    res.status(500).json({ error: "Failed to verify user." });
+    res.status(500).json({ error: "Auth failed on server." });
   }
 });
 
@@ -4582,7 +4715,7 @@ app.get('/api/audio/options', async (req, res) => {
   }
 });
 // --- Endpoint to fetch data from the "Audio" table ---
-app.get('/api/audio', async (req, res) => {
+app.get('/api/audio',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -4668,7 +4801,7 @@ app.get('/api/audio/export', async (req, res) => {
   }
 });
 
-app.put('/api/audio/:AID', async (req, res) => {
+app.put('/api/audio/:AID', authenticateToken, async (req, res) => {
   const { AID } = req.params;
   const { AudioList, Distribution, LastModifiedBy } = req.body;
 
@@ -4708,7 +4841,7 @@ app.put('/api/audio/:AID', async (req, res) => {
   }
 });
 
-app.post('/api/audio', async (req, res) => {
+app.post('/api/audio', authenticateToken, async (req, res) => {
   const { AudioList, Distribution, LastModifiedBy } = req.body;
 
   if (!AudioList) {
@@ -4737,8 +4870,14 @@ app.post('/api/audio', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/audio:", err);
-    res.status(500).json({ error: "Failed to add Audio record." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -4775,7 +4914,7 @@ app.get('/api/bhajan-type/options', async (req, res) => {
   }
 });
 
-app.get('/api/bhajan-type', async (req, res) => {
+app.get('/api/bhajan-type', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -4860,7 +4999,7 @@ app.get('/api/bhajan-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/bhajan-type/:BTID', async (req, res) => {
+app.put('/api/bhajan-type/:BTID', authenticateToken, async (req, res) => {
   const { BTID } = req.params;
   const { BhajanName, LastModifiedBy } = req.body;
 
@@ -4900,7 +5039,7 @@ app.put('/api/bhajan-type/:BTID', async (req, res) => {
   }
 });
 
-app.post('/api/bhajan-type', async (req, res) => {
+app.post('/api/bhajan-type', authenticateToken, async (req, res) => {
   const { BhajanName, LastModifiedBy } = req.body;
 
   if (!BhajanName) {
@@ -4924,9 +5063,15 @@ app.post('/api/bhajan-type', async (req, res) => {
       LastModifiedBy,
       LastModifiedTimestamp: new Date().toISOString()
     });
-  } catch (err) {
-    console.error("❌ Database query error on POST /api/bhajan-type:", err);
-    res.status(500).json({ error: "Failed to add Bhajan Type." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'fkDigitalMasterCategory' DROPDOWN ---
@@ -4962,7 +5107,7 @@ app.get('/api/digital-master-category/options', async (req, res) => {
   }
 });
 
-app.get('/api/digital-master-category', async (req, res) => {
+app.get('/api/digital-master-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -5047,7 +5192,7 @@ app.get('/api/digital-master-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/digital-master-category/:DMCID', async (req, res) => {
+app.put('/api/digital-master-category/:DMCID', authenticateToken, async (req, res) => {
   const { DMCID } = req.params;
   const { DMCategory_name, LastModifiedBy } = req.body;
 
@@ -5084,7 +5229,7 @@ app.put('/api/digital-master-category/:DMCID', async (req, res) => {
   }
 });
 
-app.post('/api/digital-master-category', async (req, res) => {
+app.post('/api/digital-master-category', authenticateToken, async (req, res) => {
   const { DMCategory_name, LastModifiedBy } = req.body;
 
   if (!DMCategory_name) {
@@ -5108,9 +5253,15 @@ app.post('/api/digital-master-category', async (req, res) => {
       LastModifiedBy,
       LastModifiedTimestamp: new Date().toISOString()
     });
-  } catch (err) {
-    console.error("❌ Database query error on POST /api/digital-master-category:", err);
-    res.status(500).json({ error: "Failed to add Digital Master Category." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'fkDistributionLabel' DROPDOWN ---
@@ -5146,7 +5297,7 @@ app.get('/api/distribution-label/options', async (req, res) => {
   }
 });
 
-app.get('/api/distribution-label', async (req, res) => {
+app.get('/api/distribution-label', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -5231,7 +5382,7 @@ app.get('/api/distribution-label/export', async (req, res) => {
   }
 });
 
-app.put('/api/distribution-label/:LabelID', async (req, res) => {
+app.put('/api/distribution-label/:LabelID', authenticateToken, async (req, res) => {
  const { LabelID } = req.params;
   const { LabelName, LastModifiedBy } = req.body;
 
@@ -5269,7 +5420,7 @@ app.put('/api/distribution-label/:LabelID', async (req, res) => {
 });
 
 
-app.post('/api/distribution-label', async (req, res) => {
+app.post('/api/distribution-label', authenticateToken, async (req, res) => {
   const { LabelName, LastModifiedBy } = req.body;
 
   if (!LabelName) {
@@ -5293,9 +5444,15 @@ app.post('/api/distribution-label', async (req, res) => {
       LastModifiedBy,
       LastModifiedTimestamp: new Date().toISOString()
     });
-  } catch (err) {
-    console.error("❌ Database query error on POST /api/distribution-label:", err);
-    res.status(500).json({ error: "Failed to add Distribution Label." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
@@ -5331,7 +5488,7 @@ app.get('/api/editing-type/options', async (req, res) => {
   }
 });
 
-app.get('/api/editing-type', async (req, res) => {
+app.get('/api/editing-type', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -5416,7 +5573,7 @@ app.get('/api/editing-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/editing-type/:EdID', async (req, res) => {
+app.put('/api/editing-type/:EdID', authenticateToken, async (req, res) => {
   const { EdID } = req.params;
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
@@ -5457,7 +5614,7 @@ app.put('/api/editing-type/:EdID', async (req, res) => {
 });
 
 
-app.post('/api/editing-type', async (req, res) => {
+app.post('/api/editing-type', authenticateToken, async (req, res) => {
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
   if (!EdType) {
@@ -5529,7 +5686,7 @@ app.get('/api/editing-status/options', async (req, res) => {
   }
 });
 
-app.get('/api/editing-status', async (req, res) => {
+app.get('/api/editing-status', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -5611,7 +5768,7 @@ app.get('/api/editing-status/export', async (req, res) => {
   }
 });
 
-app.put('/api/editing-status/:EdID', async (req, res) => {
+app.put('/api/editing-status/:EdID', authenticateToken, async (req, res) => {
   const { EdID } = req.params;
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
@@ -5643,7 +5800,7 @@ app.put('/api/editing-status/:EdID', async (req, res) => {
   }
 });
 
-app.post('/api/editing-status', async (req, res) => {
+app.post('/api/editing-status', authenticateToken, async (req, res) => {
   const { EdType, AudioVideo, LastModifiedBy } = req.body;
 
   if (!EdType) {
@@ -5672,8 +5829,14 @@ app.post('/api/editing-status', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/editing-status:", err);
-    res.status(500).json({ error: "Failed to add Editing Status." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
@@ -5709,7 +5872,7 @@ app.get('/api/event-category/options', async (req, res) => {
   }
 });
 
-app.get('/api/event-category', async (req, res) => {
+app.get('/api/event-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -5795,7 +5958,7 @@ app.get('/api/event-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/event-category/:EventCategoryID', async (req, res) => {
+app.put('/api/event-category/:EventCategoryID', authenticateToken, async (req, res) => {
     const { EventCategoryID } = req.params;
   const { EventCategory, LastModifiedBy } = req.body;
 
@@ -5826,7 +5989,7 @@ app.put('/api/event-category/:EventCategoryID', async (req, res) => {
   }
 });
 
-app.post('/api/event-category', async (req, res) => {
+app.post('/api/event-category', authenticateToken, async (req, res) => {
   const { EventCategory, LastModifiedBy } = req.body;
 
   if (!EventCategory) {
@@ -5851,8 +6014,14 @@ app.post('/api/event-category', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/event-category:", err);
-    res.status(500).json({ error: "Failed to add Event Category." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'FootageType' DROPDOWN ---
@@ -5888,7 +6057,7 @@ app.get('/api/footage-type/options', async (req, res) => {
   }
 });
 
-app.get('/api/footage-type', async (req, res) => {
+app.get('/api/footage-type', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -6007,7 +6176,7 @@ app.get('/api/format-type/options', async (req, res) => {
   }
 });
 
-app.put('/api/footage-type/:FootageID', async (req, res) => {
+app.put('/api/footage-type/:FootageID', authenticateToken, async (req, res) => {
   const { FootageID } = req.params;
   const { FootageTypeList, LastModifiedBy } = req.body;
 
@@ -6038,7 +6207,7 @@ app.put('/api/footage-type/:FootageID', async (req, res) => {
   }
 });
 
-app.post('/api/footage-type', async (req, res) => {
+app.post('/api/footage-type', authenticateToken, async (req, res) => {
   const { FootageTypeList, LastModifiedBy } = req.body;
 
   if (!FootageTypeList) {
@@ -6063,8 +6232,14 @@ app.post('/api/footage-type', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/footage-type:", err);
-    res.status(500).json({ error: "Failed to add Footage Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6153,7 +6328,7 @@ app.get('/api/format-type/export', async (req, res) => {
   }
 });
 
-app.put('/api/format-type/:FTID', async (req, res) => {
+app.put('/api/format-type/:FTID', authenticateToken, async (req, res) => {
     const { FTID } = req.params;
   const { Type, LastModifiedBy } = req.body;
 
@@ -6191,7 +6366,7 @@ app.put('/api/format-type/:FTID', async (req, res) => {
 });
 
 
-app.post('/api/format-type', async (req, res) => {
+app.post('/api/format-type', authenticateToken, async (req, res) => {
   const { Type, LastModifiedBy } = req.body;
 
   if (!Type) {
@@ -6215,9 +6390,15 @@ app.post('/api/format-type', async (req, res) => {
       LastModifiedBy,
       LastModifiedTimestamp: new Date().toISOString()
     });
-  } catch (err) {
-    console.error("❌ Database query error on POST /api/format-type:", err);
-    res.status(500).json({ error: "Failed to add Format Type." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'fkGranth' DROPDOWN ---
@@ -6253,7 +6434,7 @@ app.get('/api/granths/options', async (req, res) => {
   }
 });
 
-app.get('/api/granths', async (req, res) => {
+app.get('/api/granths',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -6337,7 +6518,7 @@ app.get('/api/granths/export', async (req, res) => {
   }
 });
 
-app.put('/api/granths/:ID', async (req, res) => {
+app.put('/api/granths/:ID', authenticateToken, async (req, res) => {
   const { ID } = req.params;
   const { Name, LastModifiedBy } = req.body;
 
@@ -6374,7 +6555,7 @@ app.put('/api/granths/:ID', async (req, res) => {
   }
 });
 
-app.post('/api/granths', async (req, res) => {
+app.post('/api/granths', authenticateToken, async (req, res) => {
   const { Name, LastModifiedBy } = req.body;
 
   if (!Name) {
@@ -6399,8 +6580,14 @@ app.post('/api/granths', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/granths:", err);
-    res.status(500).json({ error: "Failed to add Granth." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'Language' DROPDOWN ---
@@ -6436,7 +6623,7 @@ app.get('/api/language/options', async (req, res) => {
   }
 });
 
-app.get('/api/language', async (req, res) => {
+app.get('/api/language',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -6521,7 +6708,7 @@ app.get('/api/language/export', async (req, res) => {
   }
 });
 
-app.put('/api/language/:STID', async (req, res) => {
+app.put('/api/language/:STID', authenticateToken, async (req, res) => {
   const { STID } = req.params;
   const { TitleLanguage, LastModifiedBy } = req.body;
 
@@ -6552,7 +6739,7 @@ app.put('/api/language/:STID', async (req, res) => {
   }
 });
 
-app.post('/api/language', async (req, res) => {
+app.post('/api/language', authenticateToken, async (req, res) => {
   const { TitleLanguage, LastModifiedBy } = req.body;
 
   if (!TitleLanguage) {
@@ -6577,8 +6764,14 @@ app.post('/api/language', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/language:", err);
-    res.status(500).json({ error: "Failed to add Language." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'MQName' DROPDOWN ---
@@ -6614,7 +6807,7 @@ app.get('/api/master-quality/options', async (req, res) => {
   }
 });
 
-app.get('/api/master-quality', async (req, res) => {
+app.get('/api/master-quality',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -6701,7 +6894,7 @@ app.get('/api/master-quality/export', async (req, res) => {
 });
 
 
-app.put('/api/master-quality/:MQID', async (req, res) => {
+app.put('/api/master-quality/:MQID', authenticateToken, async (req, res) => {
   const { MQID } = req.params;
   const { MQName, LastModifiedBy } = req.body;
 
@@ -6732,7 +6925,7 @@ app.put('/api/master-quality/:MQID', async (req, res) => {
   }
 });
 
-app.post('/api/master-quality', async (req, res) => {
+app.post('/api/master-quality', authenticateToken, async (req, res) => {
   const { MQName, LastModifiedBy } = req.body;
 
   if (!MQName) {
@@ -6757,8 +6950,14 @@ app.post('/api/master-quality', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/master-quality:", err);
-    res.status(500).json({ error: "Failed to add Master Quality." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6795,7 +6994,7 @@ app.get('/api/organizations/options', async (req, res) => {
   }
 });
 
-app.get('/api/organizations', async (req, res) => {
+app.get('/api/organizations',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -6881,7 +7080,7 @@ app.get('/api/organizations/export', async (req, res) => {
   }
 });
 
-app.put('/api/organizations/:OrganizationID', async (req, res) => {
+app.put('/api/organizations/:OrganizationID', authenticateToken, async (req, res) => {
   const { OrganizationID } = req.params;
   const { Organization, LastModifiedBy } = req.body;
 
@@ -6913,7 +7112,7 @@ app.put('/api/organizations/:OrganizationID', async (req, res) => {
 });
 
 
-app.post('/api/organizations', async (req, res) => {
+app.post('/api/organizations', authenticateToken, async (req, res) => {
   const { Organization, LastModifiedBy } = req.body;
 
   if (!Organization) {
@@ -6938,8 +7137,14 @@ app.post('/api/organizations', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/organizations:", err);
-    res.status(500).json({ error: "Failed to add Organization." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -6977,7 +7182,7 @@ app.get('/api/new-event-category/options', async (req, res) => {
   }
 });
 
-app.get('/api/new-event-category', async (req, res) => {
+app.get('/api/new-event-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7063,7 +7268,7 @@ app.get('/api/new-event-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/new-event-category/:SrNo', async (req, res) => {
+app.put('/api/new-event-category/:SrNo', authenticateToken, async (req, res) => {
   const { SrNo } = req.params;
   const { NewEventCategoryName, LastModifiedBy, MARK_DISCARD } = req.body;
 
@@ -7094,7 +7299,7 @@ app.put('/api/new-event-category/:SrNo', async (req, res) => {
   }
 });
 
-app.post('/api/new-event-category', async (req, res) => {
+app.post('/api/new-event-category', authenticateToken, async (req, res) => {
   const { NewEventCategoryName, MARK_DISCARD, LastModifiedBy } = req.body;
 
   if (!NewEventCategoryName) {
@@ -7120,8 +7325,14 @@ app.post('/api/new-event-category', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/new-event-category:", err);
-    res.status(500).json({ error: "Failed to add New Event Category." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7158,7 +7369,7 @@ app.get('/api/cities/options', async (req, res) => {
   }
 });
 
-app.get('/api/new-cities', async (req, res) => {
+app.get('/api/new-cities',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7243,7 +7454,7 @@ app.get('/api/new-cities/export', async (req, res) => {
   }
 });
 
-app.put('/api/new-cities/:CityID', async (req, res) => {
+app.put('/api/new-cities/:CityID', authenticateToken, async (req, res) => {
    const { CityID } = req.params;
   const { City, LastModifiedBy } = req.body;
 
@@ -7274,7 +7485,7 @@ app.put('/api/new-cities/:CityID', async (req, res) => {
   }
 });
 
-app.post('/api/new-cities', async (req, res) => {
+app.post('/api/new-cities', authenticateToken, async (req, res) => {
   const { City, LastModifiedBy } = req.body;
 
   if (!City) {
@@ -7299,8 +7510,14 @@ app.post('/api/new-cities', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/new-cities:", err);
-    res.status(500).json({ error: "Failed to add City." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7338,7 +7555,7 @@ app.get('/api/countries/options', async (req, res) => {
   }
 });
 
-app.get('/api/new-countries', async (req, res) => {
+app.get('/api/new-countries', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7423,7 +7640,7 @@ app.get('/api/new-countries/export', async (req, res) => {
   }
 });
 
-app.put('/api/new-countries/:CountryID', async (req, res) => {
+app.put('/api/new-countries/:CountryID', authenticateToken, async (req, res) => {
   const { CountryID } = req.params;
   const { Country, LastModifiedBy } = req.body;
 
@@ -7454,7 +7671,7 @@ app.put('/api/new-countries/:CountryID', async (req, res) => {
   }
 });
 
-app.post('/api/new-countries', async (req, res) => {
+app.post('/api/new-countries', authenticateToken, async (req, res) => {
   const { Country, LastModifiedBy } = req.body;
 
   if (!Country) {
@@ -7478,9 +7695,15 @@ app.post('/api/new-countries', async (req, res) => {
       LastModifiedBy,
       LastModifiedTimestamp: new Date().toISOString()
     });
-  } catch (err) {
-    console.error("❌ Database query error on POST /api/new-countries:", err);
-    res.status(500).json({ error: "Failed to add Country." });
+  }catch (err) {
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'fkState' DROPDOWN ---
@@ -7516,7 +7739,7 @@ app.get('/api/states/options', async (req, res) => {
   }
 });
 
-app.get('/api/new-states', async (req, res) => {
+app.get('/api/new-states',authenticateToken,async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7601,7 +7824,7 @@ app.get('/api/new-states/export', async (req, res) => {
   }
 });
 
-app.put('/api/new-states/:StateID', async (req, res) => {
+app.put('/api/new-states/:StateID', authenticateToken, async (req, res) => {
  const { StateID } = req.params;
   const { State, LastModifiedBy } = req.body;
 
@@ -7632,7 +7855,7 @@ app.put('/api/new-states/:StateID', async (req, res) => {
   }
 });
 
-app.post('/api/new-states', async (req, res) => {
+app.post('/api/new-states', authenticateToken, async (req, res) => {
   const { State, LastModifiedBy } = req.body;
 
   if (!State) {
@@ -7657,8 +7880,14 @@ app.post('/api/new-states', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/new-states:", err);
-    res.status(500).json({ error: "Failed to add State." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -7695,7 +7924,7 @@ app.get('/api/occasion/options', async (req, res) => {
   }
 });
 
-app.get('/api/occasions', async (req, res) => {
+app.get('/api/occasions',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7780,7 +8009,7 @@ app.get('/api/occasions/export', async (req, res) => {
   }
 });
 
-app.put('/api/occasions/:OccasionID', async (req, res) => {
+app.put('/api/occasions/:OccasionID', authenticateToken, async (req, res) => {
    const { OccasionID } = req.params;
   const { Occasion, LastModifiedBy } = req.body;
 
@@ -7811,7 +8040,7 @@ app.put('/api/occasions/:OccasionID', async (req, res) => {
   }
 });
 
-app.post('/api/occasions', async (req, res) => {
+app.post('/api/occasions', authenticateToken, async (req, res) => {
   const { Occasion, LastModifiedBy } = req.body;
 
   if (!Occasion) {
@@ -7836,8 +8065,14 @@ app.post('/api/occasions', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/occasions:", err);
-    res.status(500).json({ error: "Failed to add Occasion." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'TopicSource' & 'NumberSource' DROPDOWN ---
@@ -7935,7 +8170,7 @@ app.get('/api/topic-source/options', async (req, res) => {
   }
 });
 
-app.get('/api/topic-number-source', async (req, res) => {
+app.get('/api/topic-number-source',authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
     const limit = parseInt(req.query.limit) || 50; // Default to 50 items per page
@@ -7984,7 +8219,7 @@ app.get('/api/topic-number-source', async (req, res) => {
   }
 });
 
-app.put('/api/topic-number-source/:TNID', async (req, res) => {
+app.put('/api/topic-number-source/:TNID', authenticateToken, async (req, res) => {
   const { TNID } = req.params;
   const { TNName, LastModifiedBy } = req.body;
 
@@ -8015,7 +8250,7 @@ app.put('/api/topic-number-source/:TNID', async (req, res) => {
   }
 });
 
-app.post('/api/topic-number-source', async (req, res) => {
+app.post('/api/topic-number-source', authenticateToken, async (req, res) => {
   const { TNName, LastModifiedBy } = req.body;
 
   if (!TNName) {
@@ -8040,8 +8275,14 @@ app.post('/api/topic-number-source', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/topic-number-source:", err);
-    res.status(500).json({ error: "Failed to add Topic Number Source." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // ✅ ADDED: NEW ENDPOINT TO UPDATE LAST ACTIVE STATUS
@@ -8162,7 +8403,7 @@ app.get('/api/time-of-day/options', async (req, res) => {
   }
 });
 
-app.get('/api/time-of-day', async (req, res) => {
+app.get('/api/time-of-day', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -8248,7 +8489,7 @@ app.get('/api/time-of-day/export', async (req, res) => {
 });
 
 
-app.put('/api/time-of-day/:TimeID', async (req, res) => {
+app.put('/api/time-of-day/:TimeID', authenticateToken, async (req, res) => {
     const { TimeID } = req.params;
   const { TimeList, LastModifiedBy } = req.body;
 
@@ -8288,7 +8529,7 @@ app.put('/api/time-of-day/:TimeID', async (req, res) => {
   }
 });
 
-app.post('/api/time-of-day', async (req, res) => {
+app.post('/api/time-of-day', authenticateToken, async (req, res) => {
   const { TimeList, LastModifiedBy } = req.body;
 
   if (!TimeList) {
@@ -8313,8 +8554,14 @@ app.post('/api/time-of-day', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/time-of-day:", err);
-    res.status(500).json({ error: "Failed to add Time of Day." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 // --- NEW ENDPOINT FOR 'AuxFileType' DROPDOWN ---
@@ -8351,7 +8598,7 @@ app.get('/api/aux-file-type/options', async (req, res) => {
 });
 
 
-app.get('/api/aux-file-type', async (req, res) => {
+app.get('/api/aux-file-type', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -8438,7 +8685,7 @@ app.get('/api/aux-file-type/export', async (req, res) => {
 });
 
 
-app.put('/api/aux-file-type/:AuxTypeID', async (req, res) => {
+app.put('/api/aux-file-type/:AuxTypeID', authenticateToken, async (req, res) => {
   const { AuxTypeID } = req.params;
   const { AuxFileType } = req.body;
 
@@ -8476,7 +8723,7 @@ app.put('/api/aux-file-type/:AuxTypeID', async (req, res) => {
   }
 });
 
-app.post('/api/aux-file-type', async (req, res) => {
+app.post('/api/aux-file-type', authenticateToken, async (req, res) => {
   const { AuxFileType, LastModifiedBy } = req.body;
 
   if (!AuxFileType) {
@@ -8501,8 +8748,14 @@ app.post('/api/aux-file-type', async (req, res) => {
       LastModifiedTimestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/aux-file-type:", err);
-    res.status(500).json({ error: "Failed to add Aux File Type." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
@@ -8795,7 +9048,7 @@ app.get('/api/topic-given-by/export', async (req, res) => {
   }
 });
 
-app.put('/api/topic-given-by/:TGBID', async (req, res) => {
+app.put('/api/topic-given-by/:TGBID', authenticateToken, async (req, res) => {
   const { TGBID } = req.params;
   const { TGB_Name, LastModifiedBy } = req.body;
 
@@ -8832,7 +9085,7 @@ app.put('/api/topic-given-by/:TGBID', async (req, res) => {
   }
 });
 
-app.post('/api/topic-given-by', async (req, res) => {
+app.post('/api/topic-given-by', authenticateToken, async (req, res) => {
   const { TGB_Name, LastModifiedBy } = req.body;
 
   if (!TGB_Name) {
@@ -8857,8 +9110,14 @@ app.post('/api/topic-given-by', async (req, res) => {
       LastModifiedTs: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/topic-given-by:", err);
-    res.status(500).json({ error: "Failed to add Topic Given By." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 app.get('/api/segment-category/options', async (req, res) => {
@@ -8897,7 +9156,7 @@ app.get('/api/segment-category/options', async (req, res) => {
 });
 
 
-app.get('/api/segment-category', async (req, res) => {
+app.get('/api/segment-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -8983,7 +9242,7 @@ app.get('/api/segment-category/export', async (req, res) => {
   }
 });
 
-app.put('/api/segment-category/:SegCatID', async (req, res) => {
+app.put('/api/segment-category/:SegCatID', authenticateToken, async (req, res) => {
   const { SegCatID } = req.params;
   const { SegCatName, LastModifiedBy } = req.body;
 
@@ -9020,7 +9279,7 @@ app.put('/api/segment-category/:SegCatID', async (req, res) => {
   }
 });
 
-app.post('/api/segment-category', async (req, res) => {
+app.post('/api/segment-category', authenticateToken, async (req, res) => {
   const { SegCatName, LastModifiedBy } = req.body;
 
   if (!SegCatName) {
@@ -9042,8 +9301,14 @@ app.post('/api/segment-category', async (req, res) => {
       LastModifiedTs: new Date().toISOString()
     });
   } catch (err) {
-    console.error("❌ Database query error on POST /api/segment-category:", err);
-    res.status(500).json({ error: "Failed to add Segment Category." });
+    console.error("❌ DB Error:", err);
+    res.status(500).json({
+      error: 'Database query failed',
+      message: err.message,
+      sqlMessage: err.sqlMessage,
+     
+      
+    });
   }
 });
 
