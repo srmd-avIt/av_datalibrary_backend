@@ -166,16 +166,24 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
   // --- 1. Global search ---
  // ...existing code...
 // --- 1. Global search ---
+// --- 1. Global search ---
+// --- 1. Global search ---
 if (search && searchFields.length > 0) {
   const searchConditions = [];
   searchFields.forEach(field => {
     const expr = computedExpr(field);
     if (expr) {
-      searchConditions.push(`${expr} = ?`);
-      params.push(search);
+      searchConditions.push(`${expr} LIKE ?`);
+      params.push(`%${search}%`);
     } else {
-      searchConditions.push(`${getPrefixedField(field)} = ?`);
-      params.push(search);
+      // FIX: Use ?? for the field name and push the field name into params
+      const alias = tableAliases[field];
+      if (alias) {
+        searchConditions.push(`${db.escapeId(alias)}.?? LIKE ?`);
+      } else {
+        searchConditions.push(`?? LIKE ?`);
+      }
+      params.push(field, `%${search}%`); // Push field name THEN the search value
     }
   });
   if (searchConditions.length > 0) whereClauses.push(`(${searchConditions.join(' OR ')})`);
@@ -183,46 +191,46 @@ if (search && searchFields.length > 0) {
 // ...existing code...
 
   // --- 2. Filters ---
-  Object.keys(filters).forEach(key => {
+// --- 2. Filters ---
+Object.keys(filters).forEach(key => {
   const rawValue = queryParams[key];
   if (rawValue === undefined || rawValue === null) return;
   if (['page', 'limit', 'sortBy', 'sortDirection', 'search', 'advanced_filters'].includes(key)) return;
 
   const [rawFieldName, opSuffix] = key.split('__');
   const fieldName = rawFieldName.replace(/_min|_max$/, '');
-  const prefixedField = getPrefixedField(fieldName);
+  
+  const alias = tableAliases[fieldName];
+  const identifierSql = alias ? `${db.escapeId(alias)}.??` : `??`;
   const norm = normalizeIncomingValue(rawValue);
 
-  // ✅ SPECIAL LOGIC FOR EXACT MATCH FIELDS (e.g., Number)
   if (fieldName === 'Number') {
     if (Array.isArray(norm) && norm.length > 0) {
-      // Use IN for multiple exact selections
-      whereClauses.push(`${prefixedField} IN (${norm.map(() => '?').join(',')})`);
-      params.push(...norm);
+      whereClauses.push(`${identifierSql} IN (${norm.map(() => '?').join(',')})`);
+      params.push(fieldName, ...norm); // Push field name for ??
       return;
     }
     if (typeof norm === 'string' && norm !== '') {
-      // Use = instead of LIKE for exact match
-      whereClauses.push(`${prefixedField} = ?`);
-      params.push(norm);
+      whereClauses.push(`${identifierSql} = ?`);
+      params.push(fieldName, norm); // Push field name for ??
       return;
     }
     return;
   }
 
-  // ✅ KEEP LIKE LOGIC FOR OTHER FIELDS (City, Topic, etc.)
   if (Array.isArray(norm) && norm.length > 0) {
-    const orParts = norm.map(() => `(${prefixedField} LIKE ? OR FIND_IN_SET(?, ${prefixedField}))`);
+    // FIND_IN_SET is a function, we use manual escaping here as identifier placeholder 
+    // is harder to use inside functions. getPrefixedField uses db.escapeId which is safe here.
+    const escapedField = getPrefixedField(fieldName);
+    const orParts = norm.map(() => `(${identifierSql} LIKE ? OR FIND_IN_SET(?, ${escapedField}))`);
     whereClauses.push(`(${orParts.join(' OR ')})`);
-    norm.forEach(val => params.push(`%${val}%`, val));
+    norm.forEach(val => params.push(fieldName, `%${val}%`, val));
     return;
   }
 
   if (typeof norm === 'string') {
-    // ... existing operator logic (starts_with, contains, etc.) ...
-    // If no specific operator suffix, default to LIKE
-    whereClauses.push(`${prefixedField} LIKE ?`);
-    params.push(`%${norm}%`);
+    whereClauses.push(`${identifierSql} LIKE ?`);
+    params.push(fieldName, `%${norm}%`); // Push field name for ??
     return;
   }
 });
