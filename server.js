@@ -92,6 +92,15 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Helper: Convert ISO string to MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
+function toMySQLDateTime(val) {
+  if (!val) return null;
+  const d = new Date(val);
+  if (isNaN(d)) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+
 app.post('/send-invitation', async (req, res) => {
   const { email, role, teams, message, appLink } = req.body;
   try {
@@ -443,7 +452,7 @@ app.put('/api/non-event-production/:SMCode', authenticateToken, async (req, res)
       data.PostedLink || null,
       data.Asset || null,
       data.PostName || null,
-      data.CreatedTimestamp || null,
+      toMySQLDateTime(data.CreatedTimestamp), // <-- convert here
       data.AuxFiles || null,
       data.SMFilesize || null,
       data.Remarks || null,
