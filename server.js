@@ -2054,12 +2054,43 @@ const SegmentCategory = req.body['Segment Category'];
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 
 // ...existing code...
-app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) => {
+app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
+    // Helper to convert dd.mm.yyyy to yyyy-mm-dd
+    function toSqlDate(str) {
+      if (!str) return null;
+      const [d, m, y] = str.split('.');
+      if (!d || !m || !y) return null;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    let filters = { ...req.query };
+    let dateWhere = '';
+    const dateParams = [];
+
+    const from = toSqlDate(filters.ContentFrom);
+    const to = toSqlDate(filters.ContentTo);
+
+    if (from && to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ? AND STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(from, to);
+      delete filters.ContentFrom;
+      delete filters.ContentTo;
+    } else if (from) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ?';
+      dateParams.push(from);
+      delete filters.ContentFrom;
+    } else if (to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(to);
+      delete filters.ContentTo;
+    }
+
+    // --- Build WHERE dynamically ---
     const filterableColumns = [
       'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
       'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
@@ -2071,13 +2102,9 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
-      // From DigitalRecordings / Events
       'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
-      'EventName','EventCode','Yr','NewEventCategory',
-      // UI computed
-      'EventName - EventCode'
+      'EventName','EventCode','Yr','NewEventCategory','EventName - EventCode'
     ];
-
     const aliases = {
       IsInformal: 'nml',
       IsAudioRecorded: 'nml',
@@ -2094,11 +2121,8 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
       LastModifiedTimestamp: 'nml',
       LastModifiedBy: 'nml'
     };
-
     const searchFields = filterableColumns;
-
-    // --- Build WHERE dynamically ---
-    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
 
     // Support EventDisplay (EventName - EventCode)
     let extraWhere = '';
@@ -2109,10 +2133,6 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
       extraWhere = `(${db.escapeId('e')}.${db.escapeId('EventName')} LIKE ? OR ${db.escapeId('e')}.${db.escapeId('EventCode')} LIKE ? OR CONCAT(${db.escapeId('e')}.${db.escapeId('EventName')}, ' - ', ${db.escapeId('e')}.${db.escapeId('EventCode')}) LIKE ?)`;
       extraParams.push(likeVal, likeVal, likeVal);
     }
-
-    const dateColumns = ["LastModifiedTimestamp", "ContentFrom", "ContentTo", "SatsangStart", "SatsangEnd"];
-    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
-    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
     const staticWhere = `
       nml.\`Segment Category\` IN (
@@ -2126,32 +2146,30 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
       )
     `;
 
-    // Combine WHERE clauses
-    let finalWhere = '';
-    const finalParams = [];
-
+    // --- Combine WHERE clauses ---
+    let whereParts = [];
     if (dynamicWhere) {
-      finalWhere = `${dynamicWhere} AND (${staticWhere})`;
-      finalParams.push(...dynamicParams);
-    } else {
-      finalWhere = `WHERE ${staticWhere}`;
+      whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
     }
-
+    if (dateWhere) {
+      whereParts.push(dateWhere);
+    }
+    if (staticWhere) {
+      whereParts.push(staticWhere);
+    }
     if (extraWhere) {
-      finalWhere = `${finalWhere} AND (${extraWhere})`;
-      finalParams.push(...extraParams);
+      whereParts.push(extraWhere);
     }
+    const finalWhere = 'WHERE ' + whereParts.join(' AND ');
+    const finalParams = [...dynamicParams, ...dateParams, ...extraParams];
 
     // --- COUNT QUERY ---
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
-      LEFT JOIN DigitalRecordings AS dr
-        ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      LEFT JOIN Events AS e
-        ON dr.fkEventCode = e.EventCode
-      LEFT JOIN EventCategory AS ec
-        ON e.NewEventCategory = ec.EventCategoryID
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
       ${finalWhere}
     `;
     const [[{ total }]] = await db.query(countQuery, finalParams);
@@ -2160,7 +2178,7 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
     // --- MAIN DATA QUERY ---
     const dataQuery = `
       SELECT
-       nml.MLUniqueID,
+        nml.MLUniqueID,
         nml.FootageSrNo,
         nml.LogSerialNo,
         nml.fkDigitalRecordingCode,
@@ -2214,8 +2232,8 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
-        e.NewEventCategory AS NewEventCategory,             -- ✅ Added Event FK
-        ec.EventCategory AS EventCategoryName,            -- ✅ Added category name
+        e.NewEventCategory AS NewEventCategory,
+        ec.EventCategory AS EventCategoryName,
         CONCAT(
           COALESCE(e.EventName, ''),
           CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
@@ -2226,30 +2244,25 @@ app.get('/api/newmedialog/satsang-category',authenticateToken, async (req, res) 
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
-      (CASE
-    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
-        THEN NULL
-    ELSE CONCAT_WS(' - ',
-        NULLIF(nml.ContentFrom, ''),
-        NULLIF(nml.Detail, ''),
-        NULLIF(nml.fkCity, '')
-    )
-END) AS ContentFromDetailCity
-
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
-      LEFT JOIN DigitalRecordings AS dr
-        ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      LEFT JOIN Events AS e
-        ON dr.fkEventCode = e.EventCode
-      LEFT JOIN EventCategory AS ec
-        ON e.NewEventCategory = ec.EventCategoryID        -- ✅ Join EventCategory table
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
       ${finalWhere}
-      ${orderByString}
+      ORDER BY nml.MLUniqueID DESC
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
 
-    // --- Send final response ---
     res.json({
       data: rows,
       pagination: {
@@ -2393,6 +2406,9 @@ const SegmentCategory = req.body['Segment Category'];
     });
   }
 });
+
+
+
 
 
 // --- Google Sheet: ML Formal Pending ---
@@ -3256,6 +3272,327 @@ app.put('/api/digitalrecording/:RecordingCode', authenticateToken, async (req, r
     });
   }
 });
+
+
+// ...existing code...
+
+// --- Google Sheet: Digital Recordings (Google Sheet) ---
+app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+    const search = req.query.search?.trim()?.toLowerCase() || "";
+
+    // Credentials from .env
+    const credentials = {
+      type: process.env.SERVICE_ACCOUNT_TYPE,
+      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+    };
+
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; // Update to your Digital Recordings sheet ID
+
+    const response = await googleSheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "Sheet1", // Sheet/tab name
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length <= 1) {
+      return res.status(404).json({ message: "No data found in Google Sheet." });
+    }
+
+    const headers = rows[0];
+    const allData = rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        obj[h] = row[i] || "";
+      });
+      return obj;
+    });
+
+    // Key map for filterable columns
+    const filterableColumns = [
+      "Event Code",
+      "Recording Name",
+      "Recording Code",
+      "Duration",
+      "Distribution Drive Link",
+      "Bit Rate",
+      "Dimension",
+      "Master Quality",
+      "Media Name",
+      "File Size",
+      "File Size (Bytes)",
+      "Number of Files",
+      "Recording Remarks",
+      "Counter Error",
+      "Reason Error",
+      "Master Product Title",
+      "Distribution Label",
+      "Production Bucket",
+      "Digital Master Category",
+      "Audio Bitrate",
+      "Audio Total Duration",
+      "QC Remarks Checked On",
+      "Preservation Status",
+      "QC Sevak",
+      "QC Status",
+      "Last Modified Timestamp",
+      "Submitted Date",
+      "Preservation Status Guideline Date",
+      "Info on Cassette",
+      "Is Informal",
+      "Associated DR",
+      "Teams",
+    ];
+
+    let filteredData = allData;
+    if (search) {
+      filteredData = allData.filter((row) =>
+        filterableColumns.some((key) =>
+          (row[key] || "").toLowerCase().includes(search)
+        )
+      );
+    }
+
+    Object.keys(req.query).forEach((key) => {
+      if (filterableColumns.includes(key)) {
+        const value = req.query[key].toLowerCase();
+        filteredData = filteredData.filter((row) =>
+          (row[key] || "").toLowerCase().includes(value)
+        );
+      }
+    });
+
+    const totalItems = filteredData.length;
+    const totalPages = Math.ceil(totalItems / limit);
+    const paginatedData = filteredData.slice(offset, offset + limit);
+
+    res.json({
+      data: paginatedData,
+      pagination: { page, limit, totalItems, totalPages },
+    });
+  } catch (err) {
+    console.error("❌ Google Sheets API Error:", err);
+    res.status(500).json({ error: "Failed to fetch data from Google Sheet." });
+  }
+});
+
+// --- ADD: POST endpoint to add Digital Recording to Google Sheet ---
+app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
+  try {
+    // 1. Setup Auth
+    const credentials = {
+      type: process.env.SERVICE_ACCOUNT_TYPE,
+      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+    };
+
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = require("googleapis").google.sheets({ version: "v4", auth: client });
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
+    const sheetName = "Sheet1"; 
+
+    const body = req.body || {};
+    const recordingCode = body.RecordingCode;
+
+    // 2. CHECK IF ENTRY EXISTS (For Live Chat Updates)
+    // We fetch Column C (Recording Code) to see if this record is already there.
+    let existingRowIndex = -1;
+    
+    if (recordingCode) {
+      const checkRes = await googleSheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${sheetName}!C:C`, // Assuming Recording Code is in Column C
+      });
+      
+      const rows = checkRes.data.values;
+      if (rows && rows.length > 0) {
+        // Find the index (row number is index + 1)
+        existingRowIndex = rows.findIndex(r => r[0] === recordingCode);
+      }
+    }
+
+    // 3. IF EXISTS: UPDATE ONLY LOGCHATS (Column AJ)
+    if (existingRowIndex !== -1) {
+      const rowNumber = existingRowIndex + 1; // Convert 0-based index to 1-based row
+      
+      await googleSheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!AJ${rowNumber}`, // Update specifically Column AJ
+        valueInputOption: "USER_ENTERED",
+        resource: {
+          values: [[body.Logchats || ""]]
+        }
+      });
+
+      return res.status(200).json({ message: "Chat updated in Google Sheet (Column AJ)." });
+    } 
+
+    // 4. IF NOT EXISTS: APPEND NEW ROW
+    // Added MLUniqueID and AudioWAVDRCode to shift Logchats to AJ
+    const row = [
+      body.fkEventCode || "",
+      body.EventName || "",
+      body.RecordingName || "",
+      body.RecordingCode || "",
+      body.Duration || "",
+      body.DistributionDriveLink || "",
+      body.BitRate || "",
+      body.Dimension || "",
+      body.Masterquality || "",
+      body.fkMediaName || "",
+      body.Filesize || "",
+      body.FilesizeInBytes || "",
+      body.NoOfFiles || "",
+      body.RecordingRemarks || "",
+      body.CounterError || "",
+      body.ReasonError || "",
+      body.MasterProductTitle || "",
+      body.fkDistributionLabel || "",
+      body.ProductionBucket || "",
+      body.fkDigitalMasterCategory || "",
+      body.AudioBitrate || "",
+      body.AudioTotalDuration || "",
+      body.QcRemarksCheckedOn || "",
+      body.PreservationStatus || "",
+      body.QCSevak || "",
+      body.QcStatus || "",
+      new Date().toISOString(), // Last Modified Timestamp
+      body.SubmittedDate || "",
+      body.PresStatGuidDt || "",
+      body.InfoOnCassette || "",
+      body.IsInformal || "",
+      body.AssociatedDR || "",
+      body.Teams || "",
+      body.MLUniqueID || "",        // <-- Added (Column AG / Index 32)
+      body.AudioWAVDRCode || "",    // <-- Added (Column AH / Index 33)
+      body.LastModifiedBy || (req.user && req.user.email) || "", // (Column AI / Index 34)
+      body.Logchats || ""           // <-- NOW IN COLUMN AJ (Index 35)
+    ];
+
+    await googleSheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}`,
+      valueInputOption: "USER_ENTERED",
+      resource: {
+        values: [row],
+      },
+    });
+
+    res.status(201).json({ message: "New Digital Recording added to Google Sheet successfully." });
+
+  } catch (err) {
+    console.error("❌ Google Sheets API Error:", err);
+    res.status(500).json({ error: "Failed to sync with Google Sheet.", details: err.message });
+  }
+});
+
+// --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
+app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) => {
+  const connection = await db.getConnection(); // Get dedicated connection for transaction
+  
+  try {
+    const data = req.body;
+
+    // 1. START TRANSACTION
+    await connection.beginTransaction();
+
+    // ---------------------------------------------------------
+    // ACTION 1: INSERT into DigitalRecordings
+    // ---------------------------------------------------------
+    const insertQuery = `
+      INSERT INTO DigitalRecordings (
+        fkEventCode, RecordingName, RecordingCode, Duration, DistributionDriveLink,
+        BitRate, Dimension, Masterquality, fkMediaName, Filesize, FilesizeInBytes,
+        NoOfFiles, RecordingRemarks, CounterError, ReasonError, MasterProductTitle,
+        fkDistributionLabel, ProductionBucket, fkDigitalMasterCategory, AudioBitrate,
+        AudioTotalDuration, QcRemarksCheckedOn, PreservationStatus, QCSevak, QcStatus,
+        SubmittedDate, PresStatGuidDt, InfoOnCassette, IsInformal, AssociatedDR,
+        Teams, LastModifiedBy, LastModifiedTimestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `;
+
+    const insertParams = [
+      data.fkEventCode, data.RecordingName, data.RecordingCode, data.Duration, data.DistributionDriveLink,
+      data.BitRate, data.Dimension, data.Masterquality, data.fkMediaName, data.Filesize, data.FilesizeInBytes,
+      data.NoOfFiles, data.RecordingRemarks, data.CounterError, data.ReasonError, data.MasterProductTitle,
+      data.fkDistributionLabel, data.ProductionBucket, data.fkDigitalMasterCategory, data.AudioBitrate,
+      data.AudioTotalDuration, data.QcRemarksCheckedOn, data.PreservationStatus, data.QCSevak, data.QcStatus,
+      data.SubmittedDate, data.PresStatGuidDt, data.InfoOnCassette, data.IsInformal, data.AssociatedDR,
+      data.Teams, data.LastModifiedBy
+    ];
+
+    await connection.query(insertQuery, insertParams);
+
+    // ---------------------------------------------------------
+    // ACTION 2: UPDATE NewMediaLog (Link AudioWAVDRCode to MLUniqueID)
+    // ---------------------------------------------------------
+    
+    // Only attempt update if MLUniqueID is provided in the form
+    if (data.MLUniqueID) {
+        const updateQuery = `
+            UPDATE NewMediaLog 
+            SET AudioWAVDRCode = ?, 
+                LastModifiedBy = ?, 
+                LastModifiedTimestamp = NOW()
+            WHERE MLUniqueID = ?
+        `;
+        
+        // We update the AudioWAVDRCode column with the value entered in the form
+        await connection.query(updateQuery, [
+            data.AudioWAVDRCode, 
+            data.LastModifiedBy, 
+            data.MLUniqueID
+        ]);
+        
+        console.log(`✅ Linked AudioWAVDRCode ${data.AudioWAVDRCode} to MLID ${data.MLUniqueID}`);
+    }
+
+    // 2. COMMIT TRANSACTION (Save both changes)
+    await connection.commit();
+
+    res.status(200).json({ message: "Entry approved: DR created and Media Log updated." });
+
+  } catch (err) {
+    // 3. ROLLBACK ON ERROR (Undo changes if anything fails)
+    await connection.rollback();
+    console.error("❌ Transaction Error in /api/digitalrecording/approve:", err);
+    res.status(500).json({ error: "Transaction failed.", details: err.message });
+  } finally {
+    connection.release(); // Always release connection back to pool
+  }
+});
+// ...existing code...
+// ...existing code...
 // --- NEW ENDPOINTS FOR AUXFILES TABLE ---
 
 // Endpoint to get all records from the AuxFiles table
@@ -4217,8 +4554,72 @@ app.get('/api/dashboard/padhramani-events', async (req, res) => {
     }
 });
 
+// --- NEW ENDPOINT FOR 'EventCode' DROPDOWN (From DigitalRecordings) ---
+app.get('/api/event-code/options', async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT dr.fkEventCode AS EventCode, e.EventName
+      FROM DigitalRecordings dr
+      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+      WHERE dr.fkEventCode IS NOT NULL AND TRIM(dr.fkEventCode) <> ''
+      ORDER BY dr.fkEventCode DESC
+    `;
+    const [rows] = await db.query(query);
 
+    res.status(200).json(rows); // Each row: { EventCode, EventName }
+  } catch (err) {
+    console.error("❌ Database query error on /api/event-code/options:", err);
+    res.status(500).json({ error: 'Failed to fetch Event Code options.' });
+  }
+});
+// Get all Recording Codes from DigitalRecordings
+app.get('/api/recording-options', async (req, res) => {
+  try {
+    // We join DigitalRecordings (dr) with NewMediaLog (nml) matching on RecordingCode
+    const query = `
+      SELECT DISTINCT 
+        dr.RecordingName, 
+        dr.RecordingCode, 
+        nml.MLUniqueID
+      FROM DigitalRecordings dr
+      LEFT JOIN NewMediaLog nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
+      WHERE 
+        dr.RecordingCode IS NOT NULL AND TRIM(dr.RecordingCode) <> ''
+        AND dr.RecordingName IS NOT NULL AND TRIM(dr.RecordingName) <> ''
+      ORDER BY dr.RecordingName ASC
+    `;
+    
+    const [rows] = await db.query(query);
 
+    // Returns: [{ RecordingName: "...", RecordingCode: "...", MLUniqueID: "..." }, ...]
+    res.status(200).json(rows); 
+  } catch (err) {
+    console.error("❌ Database query error on /api/recording-options:", err);
+    res.status(500).json({ error: 'Failed to fetch Recording options.' });
+  }
+});
+// --- NEW ENDPOINT FOR 'MLUniqueID' DROPDOWN (From NewMediaLog) ---
+// Get MLUniqueID for a given Recording Code from NewMediaLog
+app.get('/api/ml-unique-id/options', async (req, res) => {
+  try {
+    // Fetch ID and the Concatenated Detail + SubDetail
+    // aliased as 'Detail' so the frontend logic doesn't need to change
+    const query = `
+      SELECT DISTINCT 
+        MLUniqueID, 
+        CONCAT_WS(' - ', Detail, SubDetail) AS Detail
+      FROM NewMediaLog
+      WHERE MLUniqueID IS NOT NULL AND TRIM(MLUniqueID) <> ''
+      ORDER BY MLUniqueID DESC
+    `;
+    
+    const [rows] = await db.query(query);
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error("❌ Error fetching ML Options:", err);
+    res.status(500).json({ error: 'Failed to fetch ML options.' });
+  }
+});
 
 // in src/server/index.js
 
