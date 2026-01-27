@@ -651,7 +651,7 @@ app.put('/api/events/:EventID',authenticateToken, async (req, res) => {
 
 // --- NewMediaLog Endpoints ---
 // --- NewMediaLog Endpoints ---
-app.get('/api/newmedialog',authenticateToken, async (req, res) => {
+app.get('/api/newmedialog', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -672,17 +672,19 @@ app.get('/api/newmedialog',authenticateToken, async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr',
-      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality',
+      'DistributionDriveLink' // <-- Add this for filtering/searching if needed
     ];
 
     // mapping of column -> table alias used in SQL joins
-        const aliases = {
+    const aliases = {
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
       RecordingName: 'dr',
       RecordingCode: 'dr',
       PreservationStatus: 'dr',
+      DistributionDriveLink: 'dr', // <-- Add this for aliasing
       LastModifiedTimestamp: 'nml',
       IsInformal: 'nml',
       IsAudioRecorded: 'nml',
@@ -691,7 +693,7 @@ app.get('/api/newmedialog',authenticateToken, async (req, res) => {
 
     // global search fields (keeps UI quick-search useful)
     const searchFields = [
-     'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
       'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution',
       'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
       'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
@@ -704,7 +706,8 @@ app.get('/api/newmedialog',authenticateToken, async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr','Detail','SubDetail',
-      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality',
+      'DistributionDriveLink'
     ];
 
     // Build WHERE using correct argument order: (queryParams, searchFields, allColumns, tableAliases)
@@ -732,8 +735,9 @@ app.get('/api/newmedialog',authenticateToken, async (req, res) => {
     const dataQuery = `
       SELECT
         nml.*,
-  dr.RecordingName   AS RecordingName,
+        dr.RecordingName   AS RecordingName,
         dr.Masterquality   AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
         e.EventName        AS EventName,
         e.EventCode        AS EventCode,
         e.Yr               AS Yr,
@@ -747,16 +751,15 @@ app.get('/api/newmedialog',authenticateToken, async (req, res) => {
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
-       (CASE
-    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
-        THEN NULL
-    ELSE CONCAT_WS(' - ',
-        NULLIF(nml.ContentFrom, ''),
-        NULLIF(nml.Detail, ''),
-        NULLIF(nml.fkCity, '')
-    )
-END) AS ContentFromDetailCity
-
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -805,24 +808,26 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr',
-      'RecordingName','RecordingCode','PreservationStatus','Masterquality'
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality',
+      'DistributionDriveLink' // <-- Add this for filtering/searching if needed
     ];
 
-     // avoid ambiguous column names when WHERE references joined tables
-   const aliases = {
-     IsInformal: 'nml',
-     IsAudioRecorded: 'nml',
-    LastModifiedTimestamp: 'nml',
-    LastModifiedBy: 'nml',
-     PreservationStatus: 'dr',
-     RecordingCode: 'dr',
-     RecordingName: 'dr',
-     EventName: 'e',
-    EventCode: 'e',
-     Yr: 'e'
-   };
+    // avoid ambiguous column names when WHERE references joined tables
+    const aliases = {
+      IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
+      LastModifiedTimestamp: 'nml',
+      LastModifiedBy: 'nml',
+      PreservationStatus: 'dr',
+      RecordingCode: 'dr',
+      RecordingName: 'dr',
+      DistributionDriveLink: 'dr', // <-- Add this for aliasing
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e'
+    };
 
-     const { whereString, params } = buildWhereClause(
+    const { whereString, params } = buildWhereClause(
       req.query,
       [ 'MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
         'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
@@ -843,18 +848,10 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
       "LastModifiedTimestamp", "SubmittedDate", "SatsangStart", "SatsangEnd", "ContentFrom", "ContentTo"
     ];
     const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
-      const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns);
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns);
 
     // --- AppSheet rule translated to SQL:
-    // AND(
-    //   OR(
-    //     ISBLANK(LOOKUP([fkDigitalRecordingCode], DigitalRecordings, RecordingCode, PreservationStatus)) = TRUE,
-    //     LOOKUP(...) = "Preserve"
-    //   ),
-    //   OR([IsInformal] = "No", ISBLANK([IsInformal]) = TRUE)
-    // )
-    //
-    // Translated: (dr.PreservationStatus IS NULL/empty OR dr.PreservationStatus = 'Preserve')
+    // (dr.PreservationStatus IS NULL/empty OR dr.PreservationStatus = 'Preserve')
     // AND (nml.IsInformal = 'No' OR nml.IsInformal IS NULL OR TRIM(nml.IsInformal) = '')
     const staticWhere = `
       (
@@ -896,6 +893,7 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
         nml.*,
         dr.RecordingName   AS RecordingName,
         dr.Masterquality   AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
         e.EventName        AS EventName,
         e.EventCode        AS EventCode,
         e.Yr               AS Yr,
@@ -910,16 +908,14 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
           COALESCE(nml.SubDetail, '')
          ) AS DetailSub,
        (CASE
-    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
-        THEN NULL
-    ELSE CONCAT_WS(' - ',
-        NULLIF(nml.ContentFrom, ''),
-        NULLIF(nml.Detail, ''),
-        NULLIF(nml.fkCity, '')
-    )
-END) AS ContentFromDetailCity
-
-         
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -1196,7 +1192,7 @@ const SegmentCategory = req.body['Segment Category'];
 // server.js
 
 // ...existing code...
-app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res) => {
+app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -1214,7 +1210,7 @@ app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
       // Columns from the 'dr' (DigitalRecordings) table
-      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'DistributionDriveLink',
       // event fields
       'EventName','EventCode','Yr'
     ];
@@ -1226,6 +1222,7 @@ app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res
       RecordingCode: 'dr',
       RecordingName: 'dr',
       fkEventCode: 'dr',
+      DistributionDriveLink: 'dr',
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
@@ -1312,6 +1309,7 @@ app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res
         dr.RecordingName AS RecordingName,
         dr.Masterquality AS Masterquality,
         dr.fkEventCode,
+        dr.DistributionDriveLink AS DistributionDriveLink,
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
@@ -1326,15 +1324,14 @@ app.get('/api/newmedialog/all-except-satsang',authenticateToken, async (req, res
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
        (CASE
-    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
-        THEN NULL
-    ELSE CONCAT_WS(' - ',
-        NULLIF(nml.ContentFrom, ''),
-        NULLIF(nml.Detail, ''),
-        NULLIF(nml.fkCity, '')
-    )
-END) AS ContentFromDetailCity
-
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr 
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -1601,7 +1598,7 @@ const SegmentCategory = req.body['Segment Category'];
 // --- Corrected Endpoint for "Satsang Extracted Clips" (Using your query) ---
 // ...existing code...
 // ...existing code...
-app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req, res) => {
+app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
@@ -1618,12 +1615,9 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
       'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
       'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
-      // Columns from the 'dr' (DigitalRecordings) table
       'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode',
-      // event fields
-      'EventName','EventCode','Yr',
-      // support UI computed field
-      'EventDisplay','EventName-EventCode'
+      'EventName','EventCode','Yr','EventDisplay','EventName-EventCode',
+      'DistributionDriveLink' // <-- Add this for filtering/searching if needed
     ];
 
     const aliases = {
@@ -1632,6 +1626,7 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
       RecordingCode: 'dr',
       RecordingName: 'dr',
       fkEventCode: 'dr',
+      DistributionDriveLink: 'dr', // <-- Add this for aliasing
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
@@ -1643,10 +1638,8 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
       'EventName','EventCode','RecordingName','RecordingCode'
     ];
 
-    // build dynamic where using aliases so joined fields work
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
 
-    // support filtering by combined EventDisplay (UI uses EventDisplay or EventName-EventCode)
     let extraWhere = '';
     const extraParams = [];
     const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
@@ -1675,7 +1668,6 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
       )
     `;
 
-    // combine dynamicWhere + staticWhere + extraWhere
     let finalWhere = '';
     const finalParams = [];
 
@@ -1754,6 +1746,7 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
         nml.LastModifiedBy,
         dr.RecordingName AS RecordingName,
         dr.Masterquality AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
@@ -1768,16 +1761,15 @@ app.get('/api/newmedialog/satsang-extracted-clips',authenticateToken, async (req
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
-       (CASE
-    WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
-        THEN NULL
-    ELSE CONCAT_WS(' - ',
-        NULLIF(nml.ContentFrom, ''),
-        NULLIF(nml.Detail, ''),
-        NULLIF(nml.fkCity, '')
-    )
-END) AS ContentFromDetailCity
-
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
@@ -2054,6 +2046,7 @@ const SegmentCategory = req.body['Segment Category'];
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 
 // ...existing code...
+// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -2226,9 +2219,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
         nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink,
-        dr.RecordingName AS Recordingname,
-        nml.LastModifiedTimestamp,
-        nml.LastModifiedBy,
+        dr.RecordingName AS RecordingName, -- fixed alias
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
