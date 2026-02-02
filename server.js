@@ -203,6 +203,7 @@ if (search && searchFields.length > 0) {
 // --- 2. Filters ---
 Object.keys(filters).forEach(key => {
   const rawValue = queryParams[key];
+  
   if (rawValue === undefined || rawValue === null) return;
   if (['page', 'limit', 'sortBy', 'sortDirection', 'search', 'advanced_filters'].includes(key)) return;
 
@@ -212,6 +213,19 @@ Object.keys(filters).forEach(key => {
   const alias = tableAliases[fieldName];
   const identifierSql = alias ? `${db.escapeId(alias)}.??` : `??`;
   const norm = normalizeIncomingValue(rawValue);
+
+   if (fieldName === 'Segment Category') {
+    if (Array.isArray(norm) && norm.length > 0) {
+      // Array: Use IN (...)
+      whereClauses.push(`${getPrefixedField(fieldName)} IN (${norm.map(() => '?').join(',')})`);
+      params.push(...norm);
+    } else if (typeof norm === 'string' && norm !== '') {
+      // String: Use = (Exact Match), NOT LIKE
+      whereClauses.push(`${getPrefixedField(fieldName)} = ?`);
+      params.push(norm);
+    }
+    return; // Stop here so it doesn't fall through to generic LIKE logic
+  }
 
   if (fieldName === 'Number') {
     if (Array.isArray(norm) && norm.length > 0) {
@@ -227,15 +241,22 @@ Object.keys(filters).forEach(key => {
     return;
   }
 
-  if (Array.isArray(norm) && norm.length > 0) {
-    // FIND_IN_SET is a function, we use manual escaping here as identifier placeholder 
-    // is harder to use inside functions. getPrefixedField uses db.escapeId which is safe here.
-    const escapedField = getPrefixedField(fieldName);
-    const orParts = norm.map(() => `(${identifierSql} LIKE ? OR FIND_IN_SET(?, ${escapedField}))`);
-    whereClauses.push(`(${orParts.join(' OR ')})`);
-    norm.forEach(val => params.push(fieldName, `%${val}%`, val));
+// ...existing code...
+if (Array.isArray(norm) && norm.length > 0) {
+  if (fieldName === 'Segment Category') {
+    // Exact match only (no LIKE, no FIND_IN_SET)
+    whereClauses.push(`${getPrefixedField(fieldName)} IN (${norm.map(() => '?').join(',')})`);
+    params.push(...norm);
     return;
   }
+  // Default: LIKE or FIND_IN_SET for other fields
+  const escapedField = getPrefixedField(fieldName);
+  const orParts = norm.map(() => `(${identifierSql} LIKE ? OR FIND_IN_SET(?, ${escapedField}))`);
+  whereClauses.push(`(${orParts.join(' OR ')})`);
+  norm.forEach(val => params.push(fieldName, `%${val}%`, val));
+  return;
+}
+// ...existing code...
 
   if (typeof norm === 'string') {
     whereClauses.push(`${identifierSql} LIKE ?`);
@@ -2062,6 +2083,29 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
     }
 
     let filters = { ...req.query };
+
+    // ---------------------------------------------------------
+    // 1. EXTRACT LOCATION FILTERS
+    // ---------------------------------------------------------
+    const rawCountry = filters.fkCountry;
+    const rawState = filters.fkState;
+    const rawCity = filters.fkCity;
+
+    delete filters.fkCountry;
+    delete filters.fkState;
+    delete filters.fkCity;
+
+    const normalizeList = (val) => {
+        if (!val) return [];
+        if (Array.isArray(val)) return val; 
+        return val.split(',').map(s => s.trim()).filter(Boolean);
+    };
+
+    const countryVals = normalizeList(rawCountry);
+    const stateVals = normalizeList(rawState);
+    const cityVals = normalizeList(rawCity);
+    // ---------------------------------------------------------
+
     let dateWhere = '';
     const dateParams = [];
 
@@ -2085,19 +2129,20 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
 
     // --- Build WHERE dynamically ---
     const filterableColumns = [
-      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
-      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
-      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
-      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
-      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
-      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
-      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
-      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
-      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
-      'PreservationStatus','RecordingCode','RecordingName','fkEventCode','Masterquality','DistributionDriveLink',
-      'EventName','EventCode','Yr','NewEventCategory','EventName - EventCode'
+      'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
+      'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
+      'CounterFrom', 'CounterTo', 'SubDuration', 'TotalDuration', 'Language', 'SpeakerSinger', 'fkOrganization',
+      'Designation', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname',
+      'SatsangStart', 'SatsangEnd', 'IsAudioRecorded', 'AudioMP3Distribution', 'AudioWAVDistribution',
+      'AudioMP3DRCode', 'AudioWAVDRCode', 'Remarks', 'IsStartPage', 'EndPage', 'IsInformal', 'IsPPGNotPresent',
+      'Guidance', 'DiskMasterDuration', 'EventRefRemarksCounters', 'EventRefMLID', 'EventRefMLID2',
+      'DubbedLanguage', 'DubbingArtist', 'HasSubtitle', 'SubTitlesLanguage', 'EditingDeptRemarks', 'EditingType',
+      'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
+      'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode'
     ];
+    
     const aliases = {
       IsInformal: 'nml',
       IsAudioRecorded: 'nml',
@@ -2114,10 +2159,71 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       LastModifiedTimestamp: 'nml',
       LastModifiedBy: 'nml'
     };
+    
     const searchFields = filterableColumns;
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
 
-    // Support EventDisplay (EventName - EventCode)
+    // ---------------------------------------------------------
+    // 2. CONDITIONAL LOCATION LOGIC
+    // ---------------------------------------------------------
+    let locationWhere = '';
+    const locationParams = [];
+    const orConditions = [];
+
+    // A. City always acts as an OR condition
+    if (cityVals.length > 0) {
+        orConditions.push(`nml.fkCity IN (?)`);
+        locationParams.push(cityVals);
+    }
+
+    // B. Country & State Interaction
+    if (countryVals.length > 0 && stateVals.length > 0) {
+        
+        if (countryVals.length === 1) {
+            // CASE 1: Single Country Selected (e.g., ONLY USA)
+            // Strict AND Logic: If Country doesn't match State, return NOTHING.
+            orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
+            locationParams.push(countryVals, stateVals);
+        } else {
+            // CASE 2: Multiple Countries Selected (e.g., India, USA)
+            // Smart Fallback Logic: 
+            // - If Country matches State (India+Gujarat) -> Show.
+            // - If Country doesn't contain State (USA+Gujarat) -> Show ALL USA (Independent result).
+            
+            const subQuery = `
+                SELECT 1 FROM NewMediaLog sub 
+                WHERE sub.fkCountry = nml.fkCountry 
+                AND sub.fkState IN (?)
+            `;
+            
+            orConditions.push(`(
+                (nml.fkCountry IN (?) AND nml.fkState IN (?)) 
+                OR 
+                (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery}))
+            )`);
+            
+            // Params: Country, State, Country, SubQuery-State
+            locationParams.push(countryVals, stateVals, countryVals, stateVals);
+        }
+
+    } 
+    else if (countryVals.length > 0) {
+        // Only Country selected
+        orConditions.push(`nml.fkCountry IN (?)`);
+        locationParams.push(countryVals);
+    } 
+    else if (stateVals.length > 0) {
+        // Only State selected
+        orConditions.push(`nml.fkState IN (?)`);
+        locationParams.push(stateVals);
+    }
+
+    if (orConditions.length > 0) {
+        locationWhere = `(${orConditions.join(' OR ')})`;
+    }
+    // ---------------------------------------------------------
+
+    // Support EventDisplay
     let extraWhere = '';
     const extraParams = [];
     const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
@@ -2141,20 +2247,20 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
 
     // --- Combine WHERE clauses ---
     let whereParts = [];
-    if (dynamicWhere) {
-      whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
-    }
-    if (dateWhere) {
-      whereParts.push(dateWhere);
-    }
-    if (staticWhere) {
-      whereParts.push(staticWhere);
-    }
-    if (extraWhere) {
-      whereParts.push(extraWhere);
-    }
+    if (dynamicWhere) whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
+    if (dateWhere) whereParts.push(dateWhere);
+    if (staticWhere) whereParts.push(staticWhere);
+    if (extraWhere) whereParts.push(extraWhere);
+    if (locationWhere) whereParts.push(locationWhere);
+
     const finalWhere = 'WHERE ' + whereParts.join(' AND ');
-    const finalParams = [...dynamicParams, ...dateParams, ...extraParams];
+    
+    const finalParams = [
+        ...dynamicParams, 
+        ...dateParams, 
+        ...extraParams, 
+        ...locationParams 
+    ];
 
     // --- COUNT QUERY ---
     const countQuery = `
@@ -2219,7 +2325,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
         nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink,
-        dr.RecordingName AS RecordingName, -- fixed alias
+        dr.RecordingName AS RecordingName,
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
@@ -2268,7 +2374,6 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
     res.status(500).json({ error: err.message });
   }
 });
-
 // ...existing code...
 // ...existing code...
 
@@ -3451,43 +3556,39 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
     // 4. IF NOT EXISTS: APPEND NEW ROW
     // Added MLUniqueID and AudioWAVDRCode to shift Logchats to AJ
     const row = [
-      body.fkEventCode || "",
-      body.EventName || "",
-      body.RecordingName || "",
-      body.RecordingCode || "",
-      body.Duration || "",
-      body.DistributionDriveLink || "",
-      body.BitRate || "",
-      body.Dimension || "",
-      body.Masterquality || "",
-      body.fkMediaName || "",
-      body.Filesize || "",
-      body.FilesizeInBytes || "",
-      body.NoOfFiles || "",
-      body.RecordingRemarks || "",
-      body.CounterError || "",
-      body.ReasonError || "",
-      body.MasterProductTitle || "",
-      body.fkDistributionLabel || "",
-      body.ProductionBucket || "",
-      body.fkDigitalMasterCategory || "",
-      body.AudioBitrate || "",
-      body.AudioTotalDuration || "",
-      body.QcRemarksCheckedOn || "",
-      body.PreservationStatus || "",
-      body.QCSevak || "",
-      body.QcStatus || "",
-      new Date().toISOString(), // Last Modified Timestamp
-      body.SubmittedDate || "",
-      body.PresStatGuidDt || "",
-      body.InfoOnCassette || "",
-      body.IsInformal || "",
-      body.AssociatedDR || "",
-      body.Teams || "",
-      body.MLUniqueID || "",        // <-- Added (Column AG / Index 32)
-      body.AudioWAVDRCode || "",    // <-- Added (Column AH / Index 33)
-      body.LastModifiedBy || (req.user && req.user.email) || "", // (Column AI / Index 34)
-      body.Logchats || ""           // <-- NOW IN COLUMN AJ (Index 35)
+      body.fkEventCode || "",      // A
+      body.EventName || "",        // B
+      body.Yr || "",               // C
+      body.NewEventCategory || "", // D
+      body.RecordingName || "",    // E
+      body.RecordingCode || "",    // F
+      body.Duration || "",         // G
+      body.Filesize || "",         // H
+      body.FilesizeInBytes || "",  // I
+      body.fkMediaName || "",      // J
+      body.BitRate || "",          // K
+      body.NoOfFiles || "",        // L
+      body.AudioBitrate || "",     // M
+      body.Masterquality || "",    // N
+      body.PreservationStatus || "", // O
+      body.RecordingRemarks || "", // P
+      body.MLUniqueID || "",       // Q
+      body.AudioWAVDRCode || "",   // R
+      body.AudioMP3DRCode || "",
+      body.fkGranth || "",         // S
+      body.Number || "",           // T
+      body.Topic || "",            // U
+      body.ContentFrom || "",      // V
+      body.SatsangStart || "",     // W
+      body.SatsangEnd || "",       // X
+      body.fkCity || "",           // Y
+      body.SubDuration || "",      // Z
+      body.Detail || "",           // AA
+      body.Remarks || "",          // AB
+      new Date().toISOString(),    // AC (column 29)
+        body.LastModifiedBy || (req.user && req.user.email) || "",          // AD
+    body.Logchats || ""  // AE
+               // AF
     ];
 
     await googleSheets.spreadsheets.values.append({
@@ -3509,82 +3610,82 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
 
 // --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
 app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) => {
-  const connection = await db.getConnection(); // Get dedicated connection for transaction
-  
+  const connection = await db.getConnection();
   try {
     const data = req.body;
 
-    // 1. START TRANSACTION
     await connection.beginTransaction();
+     transactionStarted = true;
 
-    // ---------------------------------------------------------
-    // ACTION 1: INSERT into DigitalRecordings
-    // ---------------------------------------------------------
+    // Insert into DigitalRecordings with auto-filled LastModifiedBy and LastModifiedTimestamp
     const insertQuery = `
       INSERT INTO DigitalRecordings (
-        fkEventCode, RecordingName, RecordingCode, Duration, DistributionDriveLink,
-        BitRate, Dimension, Masterquality, fkMediaName, Filesize, FilesizeInBytes,
-        NoOfFiles, RecordingRemarks, CounterError, ReasonError, MasterProductTitle,
-        fkDistributionLabel, ProductionBucket, fkDigitalMasterCategory, AudioBitrate,
-        AudioTotalDuration, QcRemarksCheckedOn, PreservationStatus, QCSevak, QcStatus,
-        SubmittedDate, PresStatGuidDt, InfoOnCassette, IsInformal, AssociatedDR,
-        Teams, LastModifiedBy, LastModifiedTimestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        fkEventCode, RecordingName, RecordingCode, Duration, 
+        BitRate,  Masterquality, fkMediaName, Filesize, FilesizeInBytes,
+        NoOfFiles, RecordingRemarks,
+         AudioBitrate, AudioTotalDuration,  PreservationStatus, 
+          LastModifiedTimestamp
+      ) VALUES ( ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
 
     const insertParams = [
-      data.fkEventCode, data.RecordingName, data.RecordingCode, data.Duration, data.DistributionDriveLink,
-      data.BitRate, data.Dimension, data.Masterquality, data.fkMediaName, data.Filesize, data.FilesizeInBytes,
-      data.NoOfFiles, data.RecordingRemarks, data.CounterError, data.ReasonError, data.MasterProductTitle,
-      data.fkDistributionLabel, data.ProductionBucket, data.fkDigitalMasterCategory, data.AudioBitrate,
-      data.AudioTotalDuration, data.QcRemarksCheckedOn, data.PreservationStatus, data.QCSevak, data.QcStatus,
-      data.SubmittedDate, data.PresStatGuidDt, data.InfoOnCassette, data.IsInformal, data.AssociatedDR,
-      data.Teams, data.LastModifiedBy
+      data.fkEventCode, data.RecordingName, data.RecordingCode, data.Duration, 
+      data.BitRate, data.Masterquality, data.fkMediaName, data.Filesize, data.FilesizeInBytes,
+      data.NoOfFiles, data.RecordingRemarks, 
+      data.ProductionBucket, data.fkDigitalMasterCategory, data.AudioBitrate,
+      data.AudioTotalDuration, data.PreservationStatus,
+       // Auto-fill LastModifiedBy
     ];
 
     await connection.query(insertQuery, insertParams);
 
     // ---------------------------------------------------------
-    // ACTION 2: UPDATE NewMediaLog (Link AudioWAVDRCode to MLUniqueID)
+    // ACTION 2: UPDATE NewMediaLog (Link AudioWAVDRCode or AudioMP3DRCode to MLUniqueID)
     // ---------------------------------------------------------
-    
-    // Only attempt update if MLUniqueID is provided in the form
     if (data.MLUniqueID) {
+      let updateField = null;
+      let updateValue = null;
+
+      if (data.Masterquality === "Audio - High Res") {
+        updateField = "AudioWAVDRCode";
+        updateValue = data.AudioWAVDRCode;
+      } else if (data.Masterquality === "Audio - Low Res") {
+        updateField = "AudioMP3DRCode";
+        updateValue = data.AudioMP3DRCode;
+      }
+
+      if (updateField && updateValue) {
         const updateQuery = `
-            UPDATE NewMediaLog 
-            SET AudioWAVDRCode = ?, 
-                LastModifiedBy = ?, 
-                LastModifiedTimestamp = NOW()
-            WHERE MLUniqueID = ?
+          UPDATE NewMediaLog 
+          SET ${updateField} = ?, 
+              LastModifiedBy = ?, 
+              LastModifiedTimestamp = NOW()
+          WHERE MLUniqueID = ?
         `;
-        
-        // We update the AudioWAVDRCode column with the value entered in the form
-        await connection.query(updateQuery, [
-            data.AudioWAVDRCode, 
-            data.LastModifiedBy, 
-            data.MLUniqueID
-        ]);
-        
-        console.log(`✅ Linked AudioWAVDRCode ${data.AudioWAVDRCode} to MLID ${data.MLUniqueID}`);
+       await connection.query(updateQuery, [
+  updateValue,
+  (req.user && req.user.email) || '', // Auto-fill LastModifiedBy from authenticated user
+  data.MLUniqueID
+]);
+        console.log(`✅ Linked ${updateField} ${updateValue} to MLID ${data.MLUniqueID}`);
+      }
     }
 
     // 2. COMMIT TRANSACTION (Save both changes)
-    await connection.commit();
-
+   await connection.commit();
     res.status(200).json({ message: "Entry approved: DR created and Media Log updated." });
 
   } catch (err) {
-    // 3. ROLLBACK ON ERROR (Undo changes if anything fails)
-    await connection.rollback();
+    if (transactionStarted) {
+      try { await connection.rollback(); } catch (rollbackErr) { /* ignore */ }
+    }
     console.error("❌ Transaction Error in /api/digitalrecording/approve:", err);
     res.status(500).json({ error: "Transaction failed.", details: err.message });
   } finally {
-    connection.release(); // Always release connection back to pool
+    connection.release();
   }
 });
-// ...existing code...
-// ...existing code...
-// --- NEW ENDPOINTS FOR AUXFILES TABLE ---
+
 
 // Endpoint to get all records from the AuxFiles table
 app.get('/api/auxfiles', authenticateToken, async (req, res) => {
@@ -4546,18 +4647,22 @@ app.get('/api/dashboard/padhramani-events', async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'EventCode' DROPDOWN (From DigitalRecordings) ---
+// backend: /api/event-code/options
 app.get('/api/event-code/options', async (req, res) => {
   try {
     const query = `
-      SELECT DISTINCT dr.fkEventCode AS EventCode, e.EventName
+      SELECT DISTINCT 
+        dr.fkEventCode AS EventCode, 
+        e.EventName,
+        e.Yr,
+        e.NewEventCategory
       FROM DigitalRecordings dr
       LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
       WHERE dr.fkEventCode IS NOT NULL AND TRIM(dr.fkEventCode) <> ''
       ORDER BY dr.fkEventCode DESC
     `;
     const [rows] = await db.query(query);
-
-    res.status(200).json(rows); // Each row: { EventCode, EventName }
+    res.status(200).json(rows); // Each row: { EventCode, EventName, Yr, NewEventCategory }
   } catch (err) {
     console.error("❌ Database query error on /api/event-code/options:", err);
     res.status(500).json({ error: 'Failed to fetch Event Code options.' });
@@ -4591,26 +4696,36 @@ app.get('/api/recording-options', async (req, res) => {
 });
 // --- NEW ENDPOINT FOR 'MLUniqueID' DROPDOWN (From NewMediaLog) ---
 // Get MLUniqueID for a given Recording Code from NewMediaLog
+// ...existing code...
 app.get('/api/ml-unique-id/options', async (req, res) => {
   try {
-    // Fetch ID and the Concatenated Detail + SubDetail
-    // aliased as 'Detail' so the frontend logic doesn't need to change
+    // Fetch MLUniqueID and all fields needed for auto-fill
     const query = `
       SELECT DISTINCT 
         MLUniqueID, 
-        CONCAT_WS(' - ', Detail, SubDetail) AS Detail
+        CONCAT_WS(' - ', Detail, SubDetail) AS Detail,
+        fkGranth,
+        Number,
+        Topic,
+        ContentFrom,
+        SatsangStart,
+        SatsangEnd,
+        fkCity,
+        SubDuration,
+        Remarks
       FROM NewMediaLog
       WHERE MLUniqueID IS NOT NULL AND TRIM(MLUniqueID) <> ''
       ORDER BY MLUniqueID DESC
     `;
-    
     const [rows] = await db.query(query);
+    // Optionally, rename DetailRaw to Detail if you want both the concatenated and raw value
     res.status(200).json(rows);
   } catch (err) {
     console.error("❌ Error fetching ML Options:", err);
     res.status(500).json({ error: 'Failed to fetch ML options.' });
   }
 });
+// ...existing code...
 
 // in src/server/index.js
 
