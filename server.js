@@ -3490,6 +3490,78 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
   }
 });
 
+// GET USERS FOR MENTION LIST (Filtered by Audio Merge Access)
+app.get("/api/users/mention-list", authenticateToken, async (req, res) => {
+  try {
+    // 1. Setup Google Auth
+    const credentials = {
+      type: process.env.SERVICE_ACCOUNT_TYPE,
+      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+    };
+
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = require("googleapis").google.sheets({ version: "v4", auth: client });
+
+    // 2. User Sheet Configuration
+    const userSheetId = "1GaCTwU_LUFF2B9NbBVzenwRjrW8sPvUJMkKzDUOdme0"; 
+    const sheetName = "Sheet1";
+
+    // 3. Fetch Data (Columns A, B, C, D -> Name, Email, Role, Permissions)
+    const response = await googleSheets.spreadsheets.values.get({
+      spreadsheetId: userSheetId,
+      range: `${sheetName}!B2:K`, // Start at A2 to skip header
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) {
+      return res.json([]);
+    }
+
+    // 4. Filter Users
+    const filteredUsers = rows
+      .filter((row) => {
+        const name = row[1];
+        const email = row[2];
+        const role = (row[3] || "").toLowerCase();
+        const permissions = (row[9] || ""); // This is likely a JSON string
+
+        // Skip if no name or email
+        if (!name || !email) return false;
+
+        // Condition A: Admin or Owner always have access
+        if (role === "admin" || role === "owner") return true;
+
+        // Condition B: Permissions column contains "Audio Merge Project"
+        // We use .includes() here because parsing JSON in Sheets can be tricky if formatted broadly
+        if (permissions.includes("Audio Merge Project")) return true;
+
+        return false;
+      })
+      .map((row) => ({
+        name: row[0],
+        email: row[1],
+      }));
+
+    res.json(filteredUsers);
+
+  } catch (err) {
+    console.error("❌ Error fetching users:", err);
+    res.status(500).json({ error: "Failed to fetch user list" });
+  }
+});
 // --- ADD: POST endpoint to add Digital Recording to Google Sheet ---
 app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
   try {
@@ -3608,6 +3680,119 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
   }
 });
 
+
+// UPDATE ENTRY (PUT)
+app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
+  try {
+    // 1. Setup Auth (Same as POST)
+    const credentials = {
+      type: process.env.SERVICE_ACCOUNT_TYPE,
+      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+    };
+
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = require("googleapis").google.sheets({ version: "v4", auth: client });
+    
+    // CONFIGURATION
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
+    const sheetName = "Sheet1"; 
+    
+    const body = req.body || {};
+    const recordingCode = body.RecordingCode;
+
+    if (!recordingCode) {
+      return res.status(400).json({ error: "RecordingCode is required to update an entry." });
+    }
+
+    // 2. FIND THE ROW (Search Column F)
+    // We search Column F because that is where RecordingCode sits in your array structure
+    const checkRes = await googleSheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!F:F`, 
+    });
+
+    const rows = checkRes.data.values;
+    let rowIndex = -1;
+
+    if (rows && rows.length > 0) {
+      // Find the row index where the Recording Code matches
+      rowIndex = rows.findIndex(r => r[0] === recordingCode);
+    }
+
+    if (rowIndex === -1) {
+      return res.status(404).json({ error: "Entry not found in Google Sheet. Cannot update." });
+    }
+
+    const rowNumber = rowIndex + 1; // Convert 0-based array index to 1-based Sheet row
+
+    // 3. PREPARE THE UPDATED ROW DATA
+    // This maps exactly to the columns used in your POST request to ensure alignment.
+    // We update everything from Column A to AF to ensure all metadata edits are saved.
+    const updatedRow = [
+      body.fkEventCode || "",      // A
+      body.EventName || "",        // B
+      body.Yr || "",               // C
+      body.NewEventCategory || "", // D
+      body.RecordingName || "",    // E
+      body.RecordingCode || "",    // F
+      body.Duration || "",         // G
+      body.Filesize || "",         // H
+      body.FilesizeInBytes || "",  // I
+      body.fkMediaName || "",      // J
+      body.BitRate || "",          // K
+      body.NoOfFiles || "",        // L
+      body.AudioBitrate || "",     // M
+      body.Masterquality || "",    // N
+      body.PreservationStatus || "", // O
+      body.RecordingRemarks || "", // P
+      body.MLUniqueID || "",       // Q
+      body.AudioWAVDRCode || "",   // R
+      body.AudioMP3DRCode || "",   // S
+      body.fkGranth || "",         // T
+      body.Number || "",           // U
+      body.Topic || "",            // V
+      body.ContentFrom || "",      // W
+      body.SatsangStart || "",     // X
+      body.SatsangEnd || "",       // Y
+      body.fkCity || "",           // Z
+      body.SubDuration || "",      // AA
+      body.Detail || "",           // AB
+      body.Remarks || "",          // AC
+      new Date().toISOString(),    // AD (Last Modified Date)
+      body.LastModifiedBy || (req.user && req.user.email) || "System", // AE
+      body.Logchats || ""          // AF
+    ];
+
+    // 4. PERFORM THE UPDATE
+    await googleSheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A${rowNumber}:AF${rowNumber}`, // Updates the specific row
+      valueInputOption: "USER_ENTERED",
+      resource: {
+        values: [updatedRow]
+      }
+    });
+
+    res.status(200).json({ message: "Entry updated successfully in Google Sheet." });
+
+  } catch (err) {
+    console.error("❌ Google Sheets PUT Error:", err);
+    res.status(500).json({ error: "Failed to update Google Sheet.", details: err.message });
+  }
+});
 // --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
 app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) => {
   const connection = await db.getConnection();
