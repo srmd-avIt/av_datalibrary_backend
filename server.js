@@ -3401,17 +3401,24 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
 
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: "v4", auth: client });
-    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; // Update to your Digital Recordings sheet ID
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
 
     const response = await googleSheets.spreadsheets.values.get({
       spreadsheetId,
-      range: "Sheet1", // Sheet/tab name
+      range: "Sheet1", 
     });
 
     const rows = response.data.values;
+
+    // ✅ FIX START: Return empty data structure instead of 404 Error
     if (!rows || rows.length <= 1) {
-      return res.status(404).json({ message: "No data found in Google Sheet." });
+      console.log("ℹ️ Sheet accessed successfully but contains no data rows.");
+      return res.json({
+        data: [],
+        pagination: { page, limit, totalItems: 0, totalPages: 0 },
+      });
     }
+    // ✅ FIX END
 
     const headers = rows[0];
     const allData = rows.slice(1).map((row) => {
@@ -3424,38 +3431,13 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
 
     // Key map for filterable columns
     const filterableColumns = [
-      "Event Code",
-      "Recording Name",
-      "Recording Code",
-      "Duration",
-      "Distribution Drive Link",
-      "Bit Rate",
-      "Dimension",
-      "Master Quality",
-      "Media Name",
-      "File Size",
-      "File Size (Bytes)",
-      "Number of Files",
-      "Recording Remarks",
-      "Counter Error",
-      "Reason Error",
-      "Master Product Title",
-      "Distribution Label",
-      "Production Bucket",
-      "Digital Master Category",
-      "Audio Bitrate",
-      "Audio Total Duration",
-      "QC Remarks Checked On",
-      "Preservation Status",
-      "QC Sevak",
-      "QC Status",
-      "Last Modified Timestamp",
-      "Submitted Date",
-      "Preservation Status Guideline Date",
-      "Info on Cassette",
-      "Is Informal",
-      "Associated DR",
-      "Teams",
+      "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
+      "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
+      "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
+      "RecordingRemarks", "MLUniqueID", "AudioWAVDRCode", "AudioMP3DRCode",
+      "fkGranth", "Number", "Topic", "ContentFrom", "SatsangStart", "SatsangEnd",
+      "fkCity", "SubDuration", "Detail", "Remarks", "CreatedTimestamp",
+      "LastModifiedBy", "Logchats",
     ];
 
     let filteredData = allData;
@@ -3486,9 +3468,11 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
     });
   } catch (err) {
     console.error("❌ Google Sheets API Error:", err);
+    // Return 500 for actual errors, so the frontend knows it crashed rather than just being "missing"
     res.status(500).json({ error: "Failed to fetch data from Google Sheet." });
   }
 });
+
 
 // GET USERS FOR MENTION LIST (Filtered by Audio Merge Access)
 app.get("/api/users/mention-list", authenticateToken, async (req, res) => {
@@ -3592,48 +3576,47 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
     const body = req.body || {};
     const recordingCode = body.RecordingCode;
 
-    // 2. CHECK IF ENTRY EXISTS (For Live Chat Updates)
-    // We fetch Column C (Recording Code) to see if this record is already there.
-    let existingRowIndex = -1;
+    // 2. CHECK IF ENTRY EXISTS
+    // ✅ FIX 1: Search Column F (Index 5) because that is where RecordingCode is stored
+    const checkRes = await googleSheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!F:F`, 
+    });
     
-    if (recordingCode) {
-      const checkRes = await googleSheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${sheetName}!C:C`, // Assuming Recording Code is in Column C
-      });
-      
-      const rows = checkRes.data.values;
-      if (rows && rows.length > 0) {
-        // Find the index (row number is index + 1)
-        existingRowIndex = rows.findIndex(r => r[0] === recordingCode);
-      }
+    const rows = checkRes.data.values;
+    let existingRowIndex = -1;
+
+    if (rows && rows.length > 0) {
+      // Find the index (row number is index + 1)
+      existingRowIndex = rows.findIndex(r => r[0] === recordingCode);
     }
 
-    // 3. IF EXISTS: UPDATE ONLY LOGCHATS (Column AJ)
+    // 3. IF EXISTS: UPDATE ONLY LOGCHATS
     if (existingRowIndex !== -1) {
       const rowNumber = existingRowIndex + 1; // Convert 0-based index to 1-based row
       
+      // ✅ FIX 2: Update Column AE (Column 31) because that is where Logchats are stored in the array below
+      // If your Google Sheet actually has Logchats in AJ, change "AE" to "AJ".
       await googleSheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `${sheetName}!AJ${rowNumber}`, // Update specifically Column AJ
+      range: `${sheetName}!AF${rowNumber}`, // Targeting Column AF (Logchats)
         valueInputOption: "USER_ENTERED",
         resource: {
           values: [[body.Logchats || ""]]
         }
       });
 
-      return res.status(200).json({ message: "Chat updated in Google Sheet (Column AJ)." });
+      return res.status(200).json({ message: "Chat updated in Google Sheet." });
     } 
 
     // 4. IF NOT EXISTS: APPEND NEW ROW
-    // Added MLUniqueID and AudioWAVDRCode to shift Logchats to AJ
     const row = [
       body.fkEventCode || "",      // A
       body.EventName || "",        // B
       body.Yr || "",               // C
       body.NewEventCategory || "", // D
       body.RecordingName || "",    // E
-      body.RecordingCode || "",    // F
+      body.RecordingCode || "",    // F  <-- This matches the search logic above
       body.Duration || "",         // G
       body.Filesize || "",         // H
       body.FilesizeInBytes || "",  // I
@@ -3646,22 +3629,35 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       body.RecordingRemarks || "", // P
       body.MLUniqueID || "",       // Q
       body.AudioWAVDRCode || "",   // R
-      body.AudioMP3DRCode || "",
-      body.fkGranth || "",         // S
-      body.Number || "",           // T
-      body.Topic || "",            // U
-      body.ContentFrom || "",      // V
-      body.SatsangStart || "",     // W
-      body.SatsangEnd || "",       // X
-      body.fkCity || "",           // Y
-      body.SubDuration || "",      // Z
-      body.Detail || "",           // AA
-      body.Remarks || "",          // AB
-      new Date().toISOString(),    // AC (column 29)
-        body.LastModifiedBy || (req.user && req.user.email) || "",          // AD
-    body.Logchats || ""  // AE
-               // AF
+      body.AudioMP3DRCode || "",   // S
+      body.fkGranth || "",         // T
+      body.Number || "",           // U
+      body.Topic || "",            // V
+      body.ContentFrom || "",      // W
+      body.SatsangStart || "",     // X
+      body.SatsangEnd || "",       // Y
+      body.fkCity || "",           // Z
+      body.SubDuration || "",      // AA
+      body.Detail || "",           // AB
+      body.Remarks || "",          // AC
+      new Date().toISOString(),    // AD (Created Timestamp)
+      body.LastModifiedBy || (req.user && req.user.email) || "", // AE (Last Modified By - Wait, check logic below)
+      body.Logchats || ""          // AF (Logchats)
     ];
+    
+    // ⚠️ CRITICAL CORRECTION:
+    // Counting your array elements above:
+    // A=0, B=1 ... Z=25, AA=26, AB=27, AC=28, AD=29, AE=30, AF=31.
+    // In your array code:
+    // timestamp is index 29 (AD)
+    // LastModifiedBy is index 30 (AE)
+    // Logchats is index 31 (AF)
+    
+    // **Correction for Update Logic based on exact array count:**
+    // Since Logchats is the 32nd item (Index 31 = Column AF), 
+    // the Update logic in Step 3 should target **AF**, not AE.
+    
+    // Re-applying fix to Step 3 logic above...
 
     await googleSheets.spreadsheets.values.append({
       spreadsheetId,
@@ -10104,6 +10100,160 @@ app.post('/api/manage-columns/delete', async (req, res) => {
   }
 });
 
+// --- VIDEO ARCHIVAL: WISDOM REELS DASHBOARD ---
+
+// 1. Get Satsangs with Reel Counts
+app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+    
+    // ⭐ NEW: Check if we are filtering by a specific SourceMLID
+    const sourceMLID = req.query.sourceMLID; 
+
+    let whereConditions = `
+      child_dr.ProductionBucket LIKE '%Wisdom%'
+       AND child_nml.EventRefMLID IS NOT NULL 
+       AND child_nml.EventRefMLID <> ''
+    `;
+    
+    // ⭐ NEW: Add condition if sourceMLID exists
+    const params = [];
+    if (sourceMLID) {
+      whereConditions += ` AND child_nml.EventRefMLID = ?`;
+      params.push(sourceMLID);
+    }
+
+    /* MAIN QUERY */
+    const query = `
+      SELECT
+        child_nml.MLUniqueID AS ReelMLID,
+        child_nml.EventRefMLID AS SourceMLID,
+        child_nml.ContentFrom,
+         child_nml.CounterFrom,
+        child_nml.CounterTo,
+        child_nml.Detail,
+        child_nml.EditingStatus,
+        child_nml.Remarks,
+        child_nml.LastModifiedBy,
+        child_nml.Topic,
+        child_dr.Dimension,
+        child_dr.ProductionBucket,
+        e.EventName,
+        e.EventCode,
+        e.Yr,
+        COUNT(child_nml.EventRefMLID) OVER (PARTITION BY child_nml.EventRefMLID) AS ReelCount
+      FROM NewMediaLog child_nml
+      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      LEFT JOIN Events e ON child_dr.fkEventCode = e.EventCode
+      WHERE ${whereConditions}
+      ORDER BY child_nml.EventRefMLID, child_nml.ContentFrom DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    // Add pagination params to the array
+    params.push(limit, offset);
+
+    /* COUNT QUERY */
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      FROM NewMediaLog child_nml
+      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      WHERE ${whereConditions}
+    `;
+
+    // Count query only needs sourceMLID param if it exists, not limit/offset
+    const countParams = sourceMLID ? [sourceMLID] : [];
+
+    const [rows] = await db.query(query, params);
+    const [[{ total }]] = await db.query(countQuery, countParams);
+
+    res.json({
+      data: rows,
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+    });
+
+  } catch (err) {
+    console.error("❌ Error fetching satsang reel entries:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// 2. GET UNUSED SATSANGS (Not Used Yet)
+app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    // Subquery to find IDs that HAVE been used in Wisdom Reels
+    const usedIdsSubQuery = `
+      SELECT DISTINCT child_nml.EventRefMLID
+      FROM NewMediaLog child_nml
+      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      WHERE child_dr.ProductionBucket LIKE '%Wisdom%'
+      AND child_nml.EventRefMLID IS NOT NULL
+      AND child_nml.EventRefMLID <> ''
+    `;
+
+    // Main Query: Select Source Material NOT IN the used list
+    // We alias columns to match the Frontend Table (ReelMLID, SourceMLID, etc.)
+    const query = `
+      SELECT
+        nml.MLUniqueID AS ReelMLID,   -- Acts as primary key for table
+        nml.MLUniqueID AS SourceMLID, -- It is the source itself
+        nml.ContentFrom,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.Detail,
+        nml.EditingStatus,
+        nml.Remarks,
+        nml.LastModifiedBy,
+        nml.Topic,
+        dr.Dimension,
+        dr.ProductionBucket,
+        e.EventName,
+        e.EventCode,
+        e.Yr,
+        0 AS ReelCount
+      FROM NewMediaLog nml
+      LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+      WHERE 
+        nml.\`Segment Category\` IN ('Satsang', 'Pravachan', 'Informal Satsang', 'Prasangik Udbodhan', 'Satsang Clips', 'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision')
+        AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
+        AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+      ORDER BY nml.ContentFrom DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      FROM NewMediaLog nml
+      LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      WHERE 
+        nml.\`Segment Category\` IN ('Satsang', 'Pravachan', 'Informal Satsang', 'Prasangik Udbodhan', 'Satsang Clips', 'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision')
+        AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
+        AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+    `;
+
+    const [rows] = await db.query(query, [limit, offset]);
+    const [[{ total }]] = await db.query(countQuery);
+
+    res.json({
+      data: rows,
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+    });
+
+  } catch (err) {
+    console.error("❌ Error fetching unused satsangs:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+
+// 2. Flag a Satsang as "Being Edited" (Concurrency Control)
 
 // Start server
 const PORT = process.env.PORT || 3600;
