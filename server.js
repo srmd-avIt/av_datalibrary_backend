@@ -2235,7 +2235,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
 
     const staticWhere = `
       nml.\`Segment Category\` IN (
-        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision',
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 'SU - Extracted',
         'Satsang', 'Informal Satsang', 'Pravachan'
       )
       AND (
@@ -2504,7 +2504,314 @@ const SegmentCategory = req.body['Segment Category'];
 });
 
 
+app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
 
+    // Helper to convert dd.mm.yyyy to yyyy-mm-dd
+    function toSqlDate(str) {
+      if (!str) return null;
+      const [d, m, y] = str.split('.');
+      if (!d || !m || !y) return null;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    let filters = { ...req.query };
+
+    // ---------------------------------------------------------
+    // 1. EXTRACT LOCATION FILTERS
+    // ---------------------------------------------------------
+    const rawCountry = filters.fkCountry;
+    const rawState = filters.fkState;
+    const rawCity = filters.fkCity;
+
+    delete filters.fkCountry;
+    delete filters.fkState;
+    delete filters.fkCity;
+
+    const normalizeList = (val) => {
+        if (!val) return [];
+        if (Array.isArray(val)) return val; 
+        return val.split(',').map(s => s.trim()).filter(Boolean);
+    };
+
+    const countryVals = normalizeList(rawCountry);
+    const stateVals = normalizeList(rawState);
+    const cityVals = normalizeList(rawCity);
+    // ---------------------------------------------------------
+
+    let dateWhere = '';
+    const dateParams = [];
+
+    const from = toSqlDate(filters.ContentFrom);
+    const to = toSqlDate(filters.ContentTo);
+
+    if (from && to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ? AND STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(from, to);
+      delete filters.ContentFrom;
+      delete filters.ContentTo;
+    } else if (from) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ?';
+      dateParams.push(from);
+      delete filters.ContentFrom;
+    } else if (to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(to);
+      delete filters.ContentTo;
+    }
+
+    // --- Build WHERE dynamically ---
+    const filterableColumns = [
+      'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
+      'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
+      'CounterFrom', 'CounterTo', 'SubDuration', 'TotalDuration', 'Language', 'SpeakerSinger', 'fkOrganization',
+      'Designation', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname',
+      'SatsangStart', 'SatsangEnd', 'IsAudioRecorded', 'AudioMP3Distribution', 'AudioWAVDistribution',
+      'AudioMP3DRCode', 'AudioWAVDRCode', 'Remarks', 'IsStartPage', 'EndPage', 'IsInformal', 'IsPPGNotPresent',
+      'Guidance', 'DiskMasterDuration', 'EventRefRemarksCounters', 'EventRefMLID', 'EventRefMLID2',
+      'DubbedLanguage', 'DubbingArtist', 'HasSubtitle', 'SubTitlesLanguage', 'EditingDeptRemarks', 'EditingType',
+      'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
+      'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode'
+    ];
+    
+    const aliases = {
+      IsInformal: 'nml',
+      IsAudioRecorded: 'nml',
+      PreservationStatus: 'dr',
+      RecordingCode: 'dr',
+      RecordingName: 'dr',
+      fkEventCode: 'dr',
+      Masterquality: 'dr',
+      DistributionDriveLink: 'dr',
+      EventName: 'e',
+      EventCode: 'e',
+      Yr: 'e',
+      NewEventCategory: 'e',
+      LastModifiedTimestamp: 'nml',
+      LastModifiedBy: 'nml'
+    };
+    
+    const searchFields = filterableColumns;
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
+
+    // ---------------------------------------------------------
+    // 2. CONDITIONAL LOCATION LOGIC
+    // ---------------------------------------------------------
+    let locationWhere = '';
+    const locationParams = [];
+    const orConditions = [];
+
+    // A. City always acts as an OR condition
+    if (cityVals.length > 0) {
+        orConditions.push(`nml.fkCity IN (?)`);
+        locationParams.push(cityVals);
+    }
+
+    // B. Country & State Interaction
+    if (countryVals.length > 0 && stateVals.length > 0) {
+        
+        if (countryVals.length === 1) {
+            // CASE 1: Single Country Selected (e.g., ONLY USA)
+            // Strict AND Logic: If Country doesn't match State, return NOTHING.
+            orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
+            locationParams.push(countryVals, stateVals);
+        } else {
+            // CASE 2: Multiple Countries Selected (e.g., India, USA)
+            // Smart Fallback Logic: 
+            // - If Country matches State (India+Gujarat) -> Show.
+            // - If Country doesn't contain State (USA+Gujarat) -> Show ALL USA (Independent result).
+            
+            const subQuery = `
+                SELECT 1 FROM NewMediaLog sub 
+                WHERE sub.fkCountry = nml.fkCountry 
+                AND sub.fkState IN (?)
+            `;
+            
+            orConditions.push(`(
+                (nml.fkCountry IN (?) AND nml.fkState IN (?)) 
+                OR 
+                (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery}))
+            )`);
+            
+            // Params: Country, State, Country, SubQuery-State
+            locationParams.push(countryVals, stateVals, countryVals, stateVals);
+        }
+
+    } 
+    else if (countryVals.length > 0) {
+        // Only Country selected
+        orConditions.push(`nml.fkCountry IN (?)`);
+        locationParams.push(countryVals);
+    } 
+    else if (stateVals.length > 0) {
+        // Only State selected
+        orConditions.push(`nml.fkState IN (?)`);
+        locationParams.push(stateVals);
+    }
+
+    if (orConditions.length > 0) {
+        locationWhere = `(${orConditions.join(' OR ')})`;
+    }
+    // ---------------------------------------------------------
+
+    // Support EventDisplay
+    let extraWhere = '';
+    const extraParams = [];
+    const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
+    if (displayValue && String(displayValue).trim() !== '') {
+      const likeVal = `%${displayValue}%`;
+      extraWhere = `(${db.escapeId('e')}.${db.escapeId('EventName')} LIKE ? OR ${db.escapeId('e')}.${db.escapeId('EventCode')} LIKE ? OR CONCAT(${db.escapeId('e')}.${db.escapeId('EventName')}, ' - ', ${db.escapeId('e')}.${db.escapeId('EventCode')}) LIKE ?)`;
+      extraParams.push(likeVal, likeVal, likeVal);
+    }
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN (
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
+        'Satsang', 'Informal Satsang', 'Pravachan','Product/Webseries',
+        'SU - Extracted',
+        'Satsang Clips','SU - Capsule'
+      )
+      AND (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+      )
+    `;
+
+    // --- Combine WHERE clauses ---
+    let whereParts = [];
+    if (dynamicWhere) whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
+    if (dateWhere) whereParts.push(dateWhere);
+    if (staticWhere) whereParts.push(staticWhere);
+    if (extraWhere) whereParts.push(extraWhere);
+    if (locationWhere) whereParts.push(locationWhere);
+
+    const finalWhere = 'WHERE ' + whereParts.join(' AND ');
+    
+    const finalParams = [
+        ...dynamicParams, 
+        ...dateParams, 
+        ...extraParams, 
+        ...locationParams 
+    ];
+
+    // --- COUNT QUERY ---
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
+      ${finalWhere}
+    `;
+    const [[{ total }]] = await db.query(countQuery, finalParams);
+    const totalPages = Math.ceil(total / limit);
+
+    // --- MAIN DATA QUERY ---
+    const dataQuery = `
+      SELECT
+        nml.MLUniqueID,
+        nml.FootageSrNo,
+        nml.LogSerialNo,
+        nml.fkDigitalRecordingCode,
+        nml.ContentFrom,
+        nml.ContentTo,
+        nml.TimeOfDay,
+        nml.fkOccasion,
+        nml.EditingStatus,
+        nml.FootageType,
+        nml.Remarks,
+        nml.Guidance,
+        nml.IsInformal,
+        nml.fkGranth,
+        nml.Number,
+        nml.Topic,
+        nml.Keywords,
+        nml.TopicgivenBy,
+        nml.IsDubbed,
+        nml.DubbedLanguage,
+        nml.DubbingArtist,
+        nml.SpeakerSinger,
+        nml.fkOrganization,
+        nml.Designation,
+        nml.fkCountry,
+        nml.fkState,
+        nml.fkCity,
+        nml.Venue,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.TotalDuration,
+        nml.Detail,
+        nml.SubDetail,
+        nml.\`Segment Category\` ,
+        nml.TopicSource,
+        nml.SubDuration,
+        nml.Language,
+        nml.HasSubtitle,
+        nml.SubTitlesLanguage,
+        nml.Synopsis,
+        nml.SatsangStart,
+        nml.SatsangEnd,
+        nml.AudioMP3DRCode,
+        nml.fkCity,
+        nml.LastModifiedTimestamp,
+        nml.LastModifiedBy,
+        dr.Masterquality AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink,
+        dr.RecordingName AS RecordingName,
+        e.EventName,
+        e.EventCode,
+        e.Yr AS Yr,
+        e.NewEventCategory AS NewEventCategory,
+        ec.EventCategory AS EventCategoryName,
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub,
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
+      ${finalWhere}
+      ORDER BY nml.MLUniqueID DESC
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages
+      }
+    });
+  } catch (err) {
+    console.error("❌ API Error for /api/newmedialog/satsang-category:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // --- Google Sheet: ML Formal Pending ---
@@ -2965,10 +3272,12 @@ app.get('/api/edited-highlights',authenticateToken, async (req, res) => {
         dr.RecordingCode,
         dr.Duration,
         dr.Teams,
+        dr.RecordingRemarks,
         e.FromDate,
         e.ToDate,
         e.EventName,
         e.EventCode,
+        e.EventRemarks,
         CONCAT(COALESCE(e.EventName, ''), CASE WHEN COALESCE(e.EventName, '') <> '' AND COALESCE(e.EventCode, '') <> '' THEN ' - ' ELSE '' END, COALESCE(e.EventCode, '')) AS EventDisplay,
         e.Yr
       FROM DigitalRecordings dr
@@ -3813,7 +4122,7 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
       data.fkEventCode, data.RecordingName, data.RecordingCode, data.Duration, 
       data.BitRate, data.Masterquality, data.fkMediaName, data.Filesize, data.FilesizeInBytes,
       data.NoOfFiles, data.RecordingRemarks, 
-      data.ProductionBucket, data.fkDigitalMasterCategory, data.AudioBitrate,
+      data.fkDigitalMasterCategory, data.AudioBitrate,
       data.AudioTotalDuration, data.PreservationStatus,
        // Auto-fill LastModifiedBy
     ];
@@ -5179,6 +5488,54 @@ app.get("/api/users", authenticateToken, async (_req, res) => {
   }
 });
 
+// GET /api/users/wisdom-list
+// Returns only users who have 'Admin', 'Owner' role OR specific permission for 'Wisdom Reels Archival'
+app.get("/api/users/wisdom-list", authenticateToken, async (_req, res) => {
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+    
+    // 1. Fetch all users
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: "Sheet1!A2:K", 
+    });
+
+    const allUsers = (result.data.values || []).map(row => ({
+      name: row[1],
+      email: row[2],
+      // Make sure this index matches your Permissions column (K = 10, J = 9)
+      permissions: parsePermissions(row[10]) 
+    }));
+
+    // 2. FILTER: Only show users with EXPLICIT permission
+    const wisdomUsers = allUsers.filter(user => {
+        
+        // REMOVED: The check for 'Admin' or 'Owner'
+        
+        // STRICT CHECK: Does the user have the specific resource permission?
+        if (user.permissions && Array.isArray(user.permissions)) {
+            return user.permissions.some(p => 
+                p.resource === 'Wisdom Reels Archival' && 
+                (p.actions.includes('read') || p.actions.includes('write'))
+            );
+        }
+
+        return false;
+    });
+
+    // 3. Return simplified object
+    const responseData = wisdomUsers.map(u => ({
+        name: u.name,
+        email: u.email
+    }));
+
+    res.json(responseData);
+
+  } catch (err) {
+    console.error("Error fetching wisdom users:", err);
+    res.status(500).json({ error: "Failed to fetch wisdom user list." });
+  }
+});
 // --- ADD A NEW USER ---
 app.post("/api/users", authenticateToken, async (req, res) => {
   const { name, email, role, department, location, teams, permissions } = req.body;
@@ -10103,75 +10460,92 @@ app.post('/api/manage-columns/delete', async (req, res) => {
 // --- VIDEO ARCHIVAL: WISDOM REELS DASHBOARD ---
 
 // 1. Get Satsangs with Reel Counts
+// ... existing imports and setup ...
+
+// 1. UPDATE: Fetch Satsangs with Reel Counts (GROUPED BY EventRefMLID)
 app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    
-    // ⭐ NEW: Check if we are filtering by a specific SourceMLID
-    const sourceMLID = req.query.sourceMLID; 
+    const search = req.query.search;
 
     let whereConditions = `
       child_dr.ProductionBucket LIKE '%Wisdom%'
-       AND child_nml.EventRefMLID IS NOT NULL 
-       AND child_nml.EventRefMLID <> ''
+      AND child_nml.EventRefMLID IS NOT NULL
+      AND child_nml.EventRefMLID <> ''
     `;
-    
-    // ⭐ NEW: Add condition if sourceMLID exists
-    const params = [];
-    if (sourceMLID) {
-      whereConditions += ` AND child_nml.EventRefMLID = ?`;
-      params.push(sourceMLID);
+
+    const filterParams = [];
+
+    if (search) {
+      const s = `%${search}%`;
+      whereConditions += ` AND (
+        child_nml.MLUniqueID LIKE ? OR
+        child_nml.EventRefMLID LIKE ? OR
+        child_nml.Detail LIKE ? OR
+        child_nml.Topic LIKE ? OR
+        e.EventName LIKE ? OR
+        child_dr.ProductionBucket LIKE ?
+      )`;
+      filterParams.push(s, s, s, s, s, s);
     }
 
-    /* MAIN QUERY */
+    // DATA QUERY PARAMS
+    const dataParams = [...filterParams, limit, offset];
+
+    // GROUP BY ADDED HERE
     const query = `
       SELECT
-        child_nml.MLUniqueID AS ReelMLID,
-        child_nml.EventRefMLID AS SourceMLID,
-        child_nml.ContentFrom,
-         child_nml.CounterFrom,
-        child_nml.CounterTo,
-        child_nml.Detail,
-        child_nml.EditingStatus,
-        child_nml.Remarks,
-        child_nml.LastModifiedBy,
-        child_nml.Topic,
-        child_dr.Dimension,
-        child_dr.ProductionBucket,
-        e.EventName,
-        e.EventCode,
-        e.Yr,
-        COUNT(child_nml.EventRefMLID) OVER (PARTITION BY child_nml.EventRefMLID) AS ReelCount
+        child_nml.EventRefMLID,
+        -- We pick the latest or first value for display purposes since they are grouped
+        MAX(child_nml.MLUniqueID) as MLUniqueID, 
+        MAX(child_nml.ContentFrom) as ContentFrom,
+        MAX(child_nml.CounterFrom) as CounterFrom,
+        MAX(child_nml.CounterTo) as CounterTo,
+        MAX(child_nml.Detail) as Detail,
+        MAX(child_nml.Topic) as Topic,
+        MAX(child_dr.Dimension) as Dimension,
+        MAX(child_dr.ProductionBucket) as ProductionBucket,
+        MAX(e.EventName) as EventName,
+        MAX(e.EventCode) as EventCode,
+        MAX(e.Yr) as Yr,
+        MAX(child_nml.LockStatus) as LockStatus,
+        MAX(child_nml.LockedBy) as LockedBy,
+        COUNT(*) AS ReelCount
       FROM NewMediaLog child_nml
-      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
-      LEFT JOIN Events e ON child_dr.fkEventCode = e.EventCode
+      INNER JOIN DigitalRecordings child_dr
+        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      LEFT JOIN Events e
+        ON child_dr.fkEventCode = e.EventCode
       WHERE ${whereConditions}
-      ORDER BY child_nml.EventRefMLID, child_nml.ContentFrom DESC
+      GROUP BY child_nml.EventRefMLID
+      ORDER BY MAX(child_nml.ContentFrom) DESC
       LIMIT ? OFFSET ?
     `;
 
-    // Add pagination params to the array
-    params.push(limit, offset);
-
-    /* COUNT QUERY */
+    // COUNT QUERY (Modified to count distinct groups)
     const countQuery = `
-      SELECT COUNT(*) AS total
+      SELECT COUNT(DISTINCT child_nml.EventRefMLID) AS total
       FROM NewMediaLog child_nml
-      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      INNER JOIN DigitalRecordings child_dr
+        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      LEFT JOIN Events e
+        ON child_dr.fkEventCode = e.EventCode
       WHERE ${whereConditions}
     `;
 
-    // Count query only needs sourceMLID param if it exists, not limit/offset
-    const countParams = sourceMLID ? [sourceMLID] : [];
-
-    const [rows] = await db.query(query, params);
-    const [[{ total }]] = await db.query(countQuery, countParams);
+    const [rows] = await db.query(query, dataParams);
+    const [[{ total }]] = await db.query(countQuery, filterParams);
 
     res.json({
       data: rows,
-      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
     });
 
   } catch (err) {
@@ -10180,34 +10554,99 @@ app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res)
   }
 });
 
-// 2. GET UNUSED SATSANGS (Not Used Yet)
+// 2. ADD THIS NEW ENDPOINT: Get details for specific EventRefMLID (For the Modal)
+// 2. UPDATE: Get details for specific EventRefMLID (For the Modal)
+app.get('/api/video-archival/related-reels', authenticateToken, async (req, res) => {
+  try {
+    const { sourceMLID } = req.query;
+    if(!sourceMLID) return res.status(400).json({ error: "sourceMLID required" });
+
+    // We MUST apply the same filter here (ProductionBucket LIKE '%Wisdom%')
+    // otherwise the modal shows unrelated entries that share the same EventRefMLID
+    const query = `
+      SELECT
+        child_nml.*,
+        child_dr.Dimension,
+        child_dr.ProductionBucket,
+        e.EventName,
+        e.Yr
+      FROM NewMediaLog child_nml
+      INNER JOIN DigitalRecordings child_dr
+        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      LEFT JOIN Events e
+        ON child_dr.fkEventCode = e.EventCode
+      WHERE 
+        child_nml.EventRefMLID = ?
+        AND child_dr.ProductionBucket LIKE '%Wisdom%' -- <--- CRITICAL FIX
+      ORDER BY child_nml.MLUniqueID DESC
+    `;
+
+    const [rows] = await db.query(query, [sourceMLID]);
+    res.json(rows);
+
+  } catch (err) {
+    console.error("❌ Error fetching related reels:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+
+// 2. UPDATE: GET UNUSED SATSANGS (Include MLUniqueID and Locks)
 app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
+    const search = req.query.search;
 
-    // Subquery to find IDs that HAVE been used in Wisdom Reels
     const usedIdsSubQuery = `
       SELECT DISTINCT child_nml.EventRefMLID
       FROM NewMediaLog child_nml
-      INNER JOIN DigitalRecordings child_dr ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+      INNER JOIN DigitalRecordings child_dr
+        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
       WHERE child_dr.ProductionBucket LIKE '%Wisdom%'
-      AND child_nml.EventRefMLID IS NOT NULL
-      AND child_nml.EventRefMLID <> ''
+        AND child_nml.EventRefMLID IS NOT NULL
+        AND child_nml.EventRefMLID <> ''
     `;
 
-    // Main Query: Select Source Material NOT IN the used list
-    // We alias columns to match the Frontend Table (ReelMLID, SourceMLID, etc.)
+    let whereClause = `
+      nml.\`Segment Category\` IN (
+        'Satsang','Pravachan','Informal Satsang',
+        'Prasangik Udbodhan','Satsang Clips',
+        'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision'
+      )
+      AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
+      AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+    `;
+
+    const filterParams = [];
+
+    // SEARCH FILTER
+    if (search) {
+      const s = `%${search}%`;
+      whereClause += ` AND (
+        nml.MLUniqueID LIKE ? OR
+        nml.Detail LIKE ? OR
+        nml.Topic LIKE ? OR
+        e.EventName LIKE ? OR
+        dr.ProductionBucket LIKE ?
+      )`;
+      filterParams.push(s, s, s, s, s);
+    }
+
+    const dataParams = [...filterParams, limit, offset];
+
     const query = `
       SELECT
-        nml.MLUniqueID AS ReelMLID,   -- Acts as primary key for table
-        nml.MLUniqueID AS SourceMLID, -- It is the source itself
+        nml.MLUniqueID,
+        nml.MLUniqueID AS EventRefMLID, -- For unused, the source IS the item itself
         nml.ContentFrom,
         nml.CounterFrom,
         nml.CounterTo,
         nml.Detail,
         nml.EditingStatus,
+        nml.LockStatus,
+        nml.LockedBy,
         nml.Remarks,
         nml.LastModifiedBy,
         nml.Topic,
@@ -10218,12 +10657,11 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
         e.Yr,
         0 AS ReelCount
       FROM NewMediaLog nml
-      LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
-      WHERE 
-        nml.\`Segment Category\` IN ('Satsang', 'Pravachan', 'Informal Satsang', 'Prasangik Udbodhan', 'Satsang Clips', 'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision')
-        AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
-        AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+      LEFT JOIN DigitalRecordings dr
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events e
+        ON dr.fkEventCode = e.EventCode
+      WHERE ${whereClause}
       ORDER BY nml.ContentFrom DESC
       LIMIT ? OFFSET ?
     `;
@@ -10231,19 +10669,24 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
     const countQuery = `
       SELECT COUNT(*) AS total
       FROM NewMediaLog nml
-      LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
-      WHERE 
-        nml.\`Segment Category\` IN ('Satsang', 'Pravachan', 'Informal Satsang', 'Prasangik Udbodhan', 'Satsang Clips', 'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision')
-        AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
-        AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+      LEFT JOIN DigitalRecordings dr
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events e
+        ON dr.fkEventCode = e.EventCode
+      WHERE ${whereClause}
     `;
 
-    const [rows] = await db.query(query, [limit, offset]);
-    const [[{ total }]] = await db.query(countQuery);
+    const [rows] = await db.query(query, dataParams);
+    const [[{ total }]] = await db.query(countQuery, filterParams);
 
     res.json({
       data: rows,
-      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
     });
 
   } catch (err) {
@@ -10253,6 +10696,109 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
 });
 
 
+// 3. NEW: Lock/Unlock Entry Endpoint
+// ...existing code...
+app.put('/api/video-archival/lock-entry', authenticateToken, async (req, res) => {
+  const { MLUniqueID, action } = req.body;
+  if (!MLUniqueID || !action) {
+    return res.status(400).json({ error: "MLUniqueID and action are required." });
+  }
+  const userEmail = req.user.email;
+  const cleanMLID = String(MLUniqueID).trim();
+
+  try {
+    if (action === 'lock') {
+      // REMOVE inline comment from SQL!
+      const query = `
+        UPDATE NewMediaLog
+        SET 
+          LockStatus = 'Locked', 
+          LockedBy = ?, 
+          LastModifiedTimestamp = NOW()
+        WHERE TRIM(MLUniqueID) = ? 
+          AND (
+            LockStatus IS NULL 
+            OR LockStatus = '' 
+            OR LockStatus = 'Unlocked' 
+            OR LockedBy = ?
+          )
+      `;
+      const params = [userEmail, cleanMLID, userEmail];
+      console.log('LOCK QUERY:', query, params);
+
+      const [result] = await db.query(query, params);
+
+      if (result.affectedRows === 0) {
+        const checkQuery = "SELECT LockedBy, LockStatus FROM NewMediaLog WHERE TRIM(MLUniqueID) = ?";
+        const checkParams = [cleanMLID];
+        console.log('LOCK CHECK QUERY:', checkQuery, checkParams);
+
+        const [check] = await db.query(checkQuery, checkParams);
+
+        if (check.length === 0) {
+          return res.status(404).json({ error: "Entry not found (ID mismatch)." });
+        }
+
+        const row = check[0];
+        if (row.LockStatus === 'Locked' && row.LockedBy !== userEmail) {
+          return res.status(409).json({ error: `Already picked by ${row.LockedBy}` });
+        }
+
+        return res.status(500).json({ error: "Failed to lock entry. Please refresh." });
+      }
+
+      res.status(200).json({
+        message: "Entry picked successfully",
+        status: "Locked",
+        by: userEmail
+      });
+
+    } else if (action === 'unlock') {
+      const query = `
+        UPDATE NewMediaLog 
+        SET 
+          LockStatus = NULL, 
+          LockedBy = NULL, 
+          LastModifiedTimestamp = NOW()
+        WHERE TRIM(MLUniqueID) = ? 
+          AND (LockedBy = ? OR LockedBy IS NULL)
+      `;
+      const params = [cleanMLID, userEmail];
+      console.log('UNLOCK QUERY:', query, params);
+
+      const [result] = await db.query(query, params);
+
+      if (result.affectedRows === 0) {
+        const checkQuery = "SELECT LockedBy FROM NewMediaLog WHERE TRIM(MLUniqueID) = ?";
+        const checkParams = [cleanMLID];
+        console.log('UNLOCK CHECK QUERY:', checkQuery, checkParams);
+
+        const [check] = await db.query(checkQuery, checkParams);
+
+        if (check.length === 0) return res.status(404).json({ error: "Entry not found." });
+
+        if (check[0].LockedBy && check[0].LockedBy !== userEmail) {
+          return res.status(403).json({ error: `Cannot unpick. Locked by ${check[0].LockedBy}` });
+        }
+
+        return res.status(200).json({ message: "Entry was already unlocked", status: "Unlocked", by: null });
+      }
+
+      res.status(200).json({
+        message: "Entry unpicked successfully",
+        status: "Unlocked",
+        by: null
+      });
+
+    } else {
+      res.status(400).json({ error: "Invalid action." });
+    }
+  } catch (err) {
+    console.error("❌ Error locking entry:", err);
+    res.status(500).json({ error: "Database error.", details: err.message });
+  }
+});
+// ...existing code...
 // 2. Flag a Satsang as "Being Edited" (Concurrency Control)
 
 // Start server
