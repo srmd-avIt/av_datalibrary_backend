@@ -693,7 +693,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr',
-      'RecordingName','RecordingCode','PreservationStatus','Masterquality',
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality','ProductionBucket',
       'DistributionDriveLink' // <-- Add this for filtering/searching if needed
     ];
 
@@ -705,7 +705,9 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
       RecordingName: 'dr',
       RecordingCode: 'dr',
       PreservationStatus: 'dr',
-      DistributionDriveLink: 'dr', // <-- Add this for aliasing
+      DistributionDriveLink: 'dr',
+      ProductionBucket: 'dr',
+       // <-- Add this for aliasing
       LastModifiedTimestamp: 'nml',
       IsInformal: 'nml',
       IsAudioRecorded: 'nml',
@@ -728,7 +730,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr','Detail','SubDetail',
       'RecordingName','RecordingCode','PreservationStatus','Masterquality',
-      'DistributionDriveLink'
+      'DistributionDriveLink', 'ProductionBucket' // <-- Add this for global search if needed
     ];
 
     // Build WHERE using correct argument order: (queryParams, searchFields, allColumns, tableAliases)
@@ -759,6 +761,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
         dr.RecordingName   AS RecordingName,
         dr.Masterquality   AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
+        dr.ProductionBucket AS ProductionBucket,
         e.EventName        AS EventName,
         e.EventCode        AS EventCode,
         e.Yr               AS Yr,
@@ -829,7 +832,7 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
       'TopicGivenBy',
       // joined table columns (available for filtering/search)
       'EventName','EventCode','Yr',
-      'RecordingName','RecordingCode','PreservationStatus','Masterquality',
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality','ProductionBucket',
       'DistributionDriveLink' // <-- Add this for filtering/searching if needed
     ];
 
@@ -840,6 +843,7 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
       LastModifiedTimestamp: 'nml',
       LastModifiedBy: 'nml',
       PreservationStatus: 'dr',
+      ProductionBucket: 'dr',
       RecordingCode: 'dr',
       RecordingName: 'dr',
       DistributionDriveLink: 'dr', // <-- Add this for aliasing
@@ -915,6 +919,7 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
         dr.RecordingName   AS RecordingName,
         dr.Masterquality   AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
+        dr.ProductionBucket AS ProductionBucket,
         e.EventName        AS EventName,
         e.EventCode        AS EventCode,
         e.Yr               AS Yr,
@@ -1233,7 +1238,7 @@ app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, re
       // Columns from the 'dr' (DigitalRecordings) table
       'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'DistributionDriveLink',
       // event fields
-      'EventName','EventCode','Yr'
+      'EventName','EventCode','Yr','ProductionBucket','Masterquality',
     ];
 
     const aliases = {
@@ -1244,6 +1249,7 @@ app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, re
       RecordingName: 'dr',
       fkEventCode: 'dr',
       DistributionDriveLink: 'dr',
+      ProductionBucket: 'dr',
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
@@ -1253,7 +1259,16 @@ app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, re
     // global search fields (quick search)
     const searchFields = [
       'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode'
+      'EventName','EventCode','RecordingName','RecordingCode','PreservationStatus','Masterquality','ProductionBucket','DistributionDriveLink',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicGivenBy'
     ];
 
     // Build dynamic WHERE using aliases
@@ -1329,6 +1344,7 @@ app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, re
         dr.RecordingCode,
         dr.RecordingName AS RecordingName,
         dr.Masterquality AS Masterquality,
+        dr.ProductionBucket AS ProductionBucket,
         dr.fkEventCode,
         dr.DistributionDriveLink AS DistributionDriveLink,
         e.EventName,
@@ -1638,7 +1654,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
       'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
       'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode',
       'EventName','EventCode','Yr','EventDisplay','EventName-EventCode',
-      'DistributionDriveLink' // <-- Add this for filtering/searching if needed
+      'DistributionDriveLink' ,'ProductionBucket'// <-- Add this for filtering/searching if needed
     ];
 
     const aliases = {
@@ -1648,6 +1664,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
       RecordingName: 'dr',
       fkEventCode: 'dr',
       DistributionDriveLink: 'dr', // <-- Add this for aliasing
+      ProductionBucket: 'dr', // <-- Add this for aliasing
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
@@ -1656,7 +1673,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
 
     const searchFields = [
       'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode'
+      'EventName','EventCode','RecordingName','RecordingCode','ProducctionBucket',
     ];
 
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
@@ -1767,6 +1784,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
         nml.LastModifiedBy,
         dr.RecordingName AS RecordingName,
         dr.Masterquality AS Masterquality,
+        dr.ProductionBucket AS ProductionBucket,
         dr.DistributionDriveLink AS DistributionDriveLink, -- <-- Added here
         e.EventName,
         e.EventCode,
@@ -2140,7 +2158,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
       'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
       'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
-      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode'
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode','ProductionBucket'
     ];
     
     const aliases = {
@@ -2152,6 +2170,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       fkEventCode: 'dr',
       Masterquality: 'dr',
       DistributionDriveLink: 'dr',
+      ProductionBucket: 'dr',
       EventName: 'e',
       EventCode: 'e',
       Yr: 'e',
@@ -2325,6 +2344,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
         nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink,
+        dr.ProductionBucket AS ProductionBucket,
         dr.RecordingName AS RecordingName,
         e.EventName,
         e.EventCode,
@@ -2510,14 +2530,6 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    // Helper to convert dd.mm.yyyy to yyyy-mm-dd
-    function toSqlDate(str) {
-      if (!str) return null;
-      const [d, m, y] = str.split('.');
-      if (!d || !m || !y) return null;
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-    }
-
     let filters = { ...req.query };
 
     // ---------------------------------------------------------
@@ -2540,30 +2552,91 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const countryVals = normalizeList(rawCountry);
     const stateVals = normalizeList(rawState);
     const cityVals = normalizeList(rawCity);
-    // ---------------------------------------------------------
 
-    let dateWhere = '';
+    // ---------------------------------------------------------
+    // 2. DATE FILTERING (UPDATED FOR MULTIPLE FORMATS)
+    // ---------------------------------------------------------
+    const dateWhereParts = [];
     const dateParams = [];
 
-    const from = toSqlDate(filters.ContentFrom);
-    const to = toSqlDate(filters.ContentTo);
+    const eventFromRaw = filters.FromDate;
+    const eventToRaw = filters.ToDate;
+    const contentFromRaw = filters.ContentFrom; 
 
-    if (from && to) {
-      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ? AND STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
-      dateParams.push(from, to);
-      delete filters.ContentFrom;
-      delete filters.ContentTo;
-    } else if (from) {
-      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ?';
-      dateParams.push(from);
-      delete filters.ContentFrom;
-    } else if (to) {
-      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
-      dateParams.push(to);
-      delete filters.ContentTo;
+    // Remove from generic filters
+    delete filters.FromDate;
+    delete filters.ToDate;
+    delete filters.ContentFrom;
+    delete filters.ContentTo; 
+
+    /**
+     * Helper: Parses various date input formats into MySQL standard 'YYYY-MM-DD'
+     * Supported Inputs:
+     * 1. dd-Mon-yy (22-Nov-10)
+     * 2. dd.mm.yyyy (22.11.2010)
+     * 3. dd/mm/yyyy (22/11/2010)
+     * 4. dd-mm-yyyy (22-11-2010)
+     * 5. yyyy-mm-dd (2010-11-22)
+     */
+    const parseDateInput = (input) => {
+        if (!input) return null;
+        const trimmed = input.trim();
+        
+        // 1. Handle dd-Mon-yy OR dd-Mon-yyyy (e.g. 22-Nov-10)
+        const namedMonthRegex = /^(\d{1,2})-([a-zA-Z]{3})-(\d{2,4})$/;
+        const namedMatch = trimmed.match(namedMonthRegex);
+        if (namedMatch) {
+            const monMap = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+            const d = namedMatch[1].padStart(2, '0');
+            const mStr = namedMatch[2].toLowerCase();
+            let y = namedMatch[3];
+            if (y.length === 2) y = '20' + y; // Assume 20xx
+            const m = monMap[mStr];
+            if (m) return `${y}-${m}-${d}`;
+        }
+
+        // 2. Handle Numeric Formats with separators (., /, -)
+        // This covers: dd.mm.yyyy, dd-mm-yyyy, dd/mm/yyyy
+        // Logic assumes Day-Month-Year (DMY) preference
+        const numericRegex = /^(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})$/;
+        const numMatch = trimmed.match(numericRegex);
+        if (numMatch) {
+            const [_, d, m, y] = numMatch;
+            return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        }
+        
+        // 3. Handle ISO YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+        
+        return null;
+    };
+
+    // A. ContentFrom - Exact String Match (Unchanged)
+    if (contentFromRaw) {
+      dateWhereParts.push('nml.ContentFrom = ?');
+      dateParams.push(contentFromRaw);
     }
 
-    // --- Build WHERE dynamically ---
+    // B. Event From Date
+    const formattedFromDate = parseDateInput(eventFromRaw);
+    if (formattedFromDate) {
+      // Compares DB Date (parsed from '24-Jul-05') against User Date ('2005-07-24')
+      dateWhereParts.push("STR_TO_DATE(e.FromDate, '%d-%b-%y') >= ?");
+      dateParams.push(formattedFromDate);
+    }
+ 
+    // C. Event To Date
+    const formattedToDate = parseDateInput(eventToRaw);
+    if (formattedToDate) {
+      dateWhereParts.push("STR_TO_DATE(e.FromDate, '%d-%b-%y') <= ?");
+      dateParams.push(formattedToDate);
+    }
+
+    const dateWhere = dateWhereParts.length > 0 ? dateWhereParts.join(' AND ') : '';
+
+    // ---------------------------------------------------------
+    // 3. DYNAMIC SEARCH FIELDS
+    // ---------------------------------------------------------
     const filterableColumns = [
       'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
       'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
@@ -2600,7 +2673,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
 
     // ---------------------------------------------------------
-    // 2. CONDITIONAL LOCATION LOGIC
+    // 4. CONDITIONAL LOCATION LOGIC
     // ---------------------------------------------------------
     let locationWhere = '';
     const locationParams = [];
@@ -2614,42 +2687,28 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
 
     // B. Country & State Interaction
     if (countryVals.length > 0 && stateVals.length > 0) {
-        
         if (countryVals.length === 1) {
-            // CASE 1: Single Country Selected (e.g., ONLY USA)
-            // Strict AND Logic: If Country doesn't match State, return NOTHING.
             orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
             locationParams.push(countryVals, stateVals);
         } else {
-            // CASE 2: Multiple Countries Selected (e.g., India, USA)
-            // Smart Fallback Logic: 
-            // - If Country matches State (India+Gujarat) -> Show.
-            // - If Country doesn't contain State (USA+Gujarat) -> Show ALL USA (Independent result).
-            
             const subQuery = `
                 SELECT 1 FROM NewMediaLog sub 
                 WHERE sub.fkCountry = nml.fkCountry 
                 AND sub.fkState IN (?)
             `;
-            
             orConditions.push(`(
                 (nml.fkCountry IN (?) AND nml.fkState IN (?)) 
                 OR 
                 (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery}))
             )`);
-            
-            // Params: Country, State, Country, SubQuery-State
             locationParams.push(countryVals, stateVals, countryVals, stateVals);
         }
-
     } 
     else if (countryVals.length > 0) {
-        // Only Country selected
         orConditions.push(`nml.fkCountry IN (?)`);
         locationParams.push(countryVals);
     } 
     else if (stateVals.length > 0) {
-        // Only State selected
         orConditions.push(`nml.fkState IN (?)`);
         locationParams.push(stateVals);
     }
@@ -2657,9 +2716,10 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     if (orConditions.length > 0) {
         locationWhere = `(${orConditions.join(' OR ')})`;
     }
-    // ---------------------------------------------------------
 
-    // Support EventDisplay
+    // ---------------------------------------------------------
+    // 5. EVENT DISPLAY SEARCH
+    // ---------------------------------------------------------
     let extraWhere = '';
     const extraParams = [];
     const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
@@ -2669,6 +2729,9 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       extraParams.push(likeVal, likeVal, likeVal);
     }
 
+    // ---------------------------------------------------------
+    // 6. STATIC CONSTRAINTS
+    // ---------------------------------------------------------
     const staticWhere = `
       nml.\`Segment Category\` IN (
         'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
@@ -2683,7 +2746,9 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       )
     `;
 
-    // --- Combine WHERE clauses ---
+    // ---------------------------------------------------------
+    // 7. ASSEMBLE QUERY
+    // ---------------------------------------------------------
     let whereParts = [];
     if (dynamicWhere) whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
     if (dateWhere) whereParts.push(dateWhere);
@@ -2808,7 +2873,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       }
     });
   } catch (err) {
-    console.error("❌ API Error for /api/newmedialog/satsang-category:", err);
+    console.error("❌ API Error for /api/newmedialog/satsang-dashboard:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -10463,13 +10528,24 @@ app.post('/api/manage-columns/delete', async (req, res) => {
 // ... existing imports and setup ...
 
 // 1. UPDATE: Fetch Satsangs with Reel Counts (GROUPED BY EventRefMLID)
+// 1. MAIN LIST: Group by Parent, show Parent Details
 app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const search = req.query.search;
 
+    const { 
+      search, 
+      Yr, 
+      EventName, 
+      Topic, 
+      ProductionBucket, 
+      MLUniqueID 
+    } = req.query;
+
+    // We start with the PARENT table (parent_nml)
+    // We INNER JOIN children to ensure we only get parents that HAVE wisdom reels
     let whereConditions = `
       child_dr.ProductionBucket LIKE '%Wisdom%'
       AND child_nml.EventRefMLID IS NOT NULL
@@ -10478,60 +10554,95 @@ app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res)
 
     const filterParams = [];
 
+    // Apply Search/Filters to the PARENT fields (since that's what we display)
     if (search) {
       const s = `%${search}%`;
       whereConditions += ` AND (
-        child_nml.MLUniqueID LIKE ? OR
-        child_nml.EventRefMLID LIKE ? OR
-        child_nml.Detail LIKE ? OR
-        child_nml.Topic LIKE ? OR
-        e.EventName LIKE ? OR
-        child_dr.ProductionBucket LIKE ?
+        parent_nml.MLUniqueID LIKE ? OR
+        parent_nml.Detail LIKE ? OR
+        parent_nml.Topic LIKE ? OR
+        parent_e.EventName LIKE ? OR
+        parent_dr.ProductionBucket LIKE ?
       )`;
-      filterParams.push(s, s, s, s, s, s);
+      filterParams.push(s, s, s, s, s);
     }
 
-    // DATA QUERY PARAMS
+    if (Yr && Yr.trim() !== '') {
+      whereConditions += " AND parent_e.Yr = ?";
+      filterParams.push(Yr.trim());
+    }
+
+    if (EventName && EventName.trim() !== '') {
+      whereConditions += " AND parent_e.EventName LIKE ?";
+      filterParams.push(`%${EventName.trim()}%`);
+    }
+
+    if (Topic && Topic.trim() !== '') {
+      whereConditions += " AND parent_nml.Topic LIKE ?";
+      filterParams.push(`%${Topic.trim()}%`);
+    }
+
+    if (ProductionBucket && ProductionBucket.trim() !== '') {
+      // Note: Filtering Parent Bucket
+      whereConditions += " AND parent_dr.ProductionBucket LIKE ?"; 
+      filterParams.push(`%${ProductionBucket.trim()}%`);
+    }
+
+    if (MLUniqueID && MLUniqueID.trim() !== '') {
+      whereConditions += " AND parent_nml.MLUniqueID = ?";
+      filterParams.push(MLUniqueID.trim());
+    }
+
     const dataParams = [...filterParams, limit, offset];
 
-    // GROUP BY ADDED HERE
     const query = `
       SELECT
-        child_nml.EventRefMLID,
-        -- We pick the latest or first value for display purposes since they are grouped
-        MAX(child_nml.MLUniqueID) as MLUniqueID, 
-        MAX(child_nml.ContentFrom) as ContentFrom,
-        MAX(child_nml.CounterFrom) as CounterFrom,
-        MAX(child_nml.CounterTo) as CounterTo,
-        MAX(child_nml.Detail) as Detail,
-        MAX(child_nml.Topic) as Topic,
-        MAX(child_dr.Dimension) as Dimension,
-        MAX(child_dr.ProductionBucket) as ProductionBucket,
-        MAX(e.EventName) as EventName,
-        MAX(e.EventCode) as EventCode,
-        MAX(e.Yr) as Yr,
-        MAX(child_nml.LockStatus) as LockStatus,
-        MAX(child_nml.LockedBy) as LockedBy,
-        COUNT(*) AS ReelCount
-      FROM NewMediaLog child_nml
+        parent_nml.MLUniqueID,
+        -- Important: Frontend uses EventRefMLID to open modal. 
+        -- For the parent row, its own ID is the reference key.
+        parent_nml.MLUniqueID as EventRefMLID, 
+        parent_nml.ContentFrom,
+        parent_nml.CounterFrom,
+        parent_nml.CounterTo,
+        parent_nml.Detail,
+        parent_nml.Topic,
+        parent_nml.LockStatus,
+        parent_nml.LockedBy,
+        parent_dr.Dimension,
+        parent_dr.ProductionBucket,
+        parent_dr.RecordingName,
+        parent_e.EventName,
+        parent_e.EventCode,
+        parent_e.Yr,
+        COUNT(child_nml.MLUniqueID) AS ReelCount
+      FROM NewMediaLog parent_nml
+      -- Join Parent Metadata
+      LEFT JOIN DigitalRecordings parent_dr
+        ON parent_nml.fkDigitalRecordingCode = parent_dr.RecordingCode
+      LEFT JOIN Events parent_e
+        ON parent_dr.fkEventCode = parent_e.EventCode
+      -- Join Children (INNER JOIN acts as the filter to only show Parents with Reels)
+      INNER JOIN NewMediaLog child_nml 
+        ON child_nml.EventRefMLID = parent_nml.MLUniqueID
       INNER JOIN DigitalRecordings child_dr
         ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
-      LEFT JOIN Events e
-        ON child_dr.fkEventCode = e.EventCode
       WHERE ${whereConditions}
-      GROUP BY child_nml.EventRefMLID
-      ORDER BY MAX(child_nml.ContentFrom) DESC
+      GROUP BY parent_nml.MLUniqueID
+      ORDER BY parent_nml.ContentFrom DESC
       LIMIT ? OFFSET ?
     `;
 
-    // COUNT QUERY (Modified to count distinct groups)
     const countQuery = `
-      SELECT COUNT(DISTINCT child_nml.EventRefMLID) AS total
-      FROM NewMediaLog child_nml
+      SELECT COUNT(DISTINCT parent_nml.MLUniqueID) AS total
+      FROM NewMediaLog parent_nml
+      LEFT JOIN DigitalRecordings parent_dr
+        ON parent_nml.fkDigitalRecordingCode = parent_dr.RecordingCode
+      LEFT JOIN Events parent_e
+        ON parent_dr.fkEventCode = parent_e.EventCode
+      INNER JOIN NewMediaLog child_nml 
+        ON child_nml.EventRefMLID = parent_nml.MLUniqueID
       INNER JOIN DigitalRecordings child_dr
         ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
-      LEFT JOIN Events e
-        ON child_dr.fkEventCode = e.EventCode
       WHERE ${whereConditions}
     `;
 
@@ -10554,34 +10665,56 @@ app.get('/api/video-archival/satsang-reels', authenticateToken, async (req, res)
   }
 });
 
-// 2. ADD THIS NEW ENDPOINT: Get details for specific EventRefMLID (For the Modal)
-// 2. UPDATE: Get details for specific EventRefMLID (For the Modal)
+// 2. MODAL LIST: Show Parent First, then Children (UNION Query)
 app.get('/api/video-archival/related-reels', authenticateToken, async (req, res) => {
   try {
     const { sourceMLID } = req.query;
-    if(!sourceMLID) return res.status(400).json({ error: "sourceMLID required" });
+    if (!sourceMLID) return res.status(400).json({ error: "sourceMLID required" });
 
-    // We MUST apply the same filter here (ProductionBucket LIKE '%Wisdom%')
-    // otherwise the modal shows unrelated entries that share the same EventRefMLID
+    // We select specific columns to ensure the UNION works perfectly.
+    // 1st Query: Gets the PARENT (The main Satsang)
+    // 2nd Query: Gets the CHILDREN (The Reels created from it)
     const query = `
-      SELECT
-        child_nml.*,
-        child_dr.Dimension,
-        child_dr.ProductionBucket,
-        e.EventName,
-        e.Yr
-      FROM NewMediaLog child_nml
-      INNER JOIN DigitalRecordings child_dr
-        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
-      LEFT JOIN Events e
-        ON child_dr.fkEventCode = e.EventCode
-      WHERE 
-        child_nml.EventRefMLID = ?
-        AND child_dr.ProductionBucket LIKE '%Wisdom%' -- <--- CRITICAL FIX
-      ORDER BY child_nml.MLUniqueID DESC
+      (
+        SELECT 
+          nml.MLUniqueID,
+          nml.ContentFrom, 
+          nml.CounterFrom, 
+          nml.CounterTo, 
+          nml.Detail, 
+          nml.Topic,
+          dr.Dimension, 
+          dr.ProductionBucket,
+          e.EventName,
+          'Parent' as EntryType
+        FROM NewMediaLog nml
+        LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+        LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+        WHERE nml.MLUniqueID = ?
+      )
+      UNION ALL
+      (
+        SELECT 
+          nml.MLUniqueID,
+          nml.ContentFrom, 
+          nml.CounterFrom, 
+          nml.CounterTo, 
+          nml.Detail, 
+          nml.Topic,
+          dr.Dimension, 
+          dr.ProductionBucket,
+          e.EventName,
+          'Child' as EntryType
+        FROM NewMediaLog nml
+        LEFT JOIN DigitalRecordings dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+        LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
+        WHERE nml.EventRefMLID = ? 
+        AND dr.ProductionBucket LIKE '%Wisdom%'
+      )
     `;
 
-    const [rows] = await db.query(query, [sourceMLID]);
+    // Pass sourceMLID twice: once for the Parent ID check, once for the Child RefID check
+    const [rows] = await db.query(query, [sourceMLID, sourceMLID]);
     res.json(rows);
 
   } catch (err) {
@@ -10590,14 +10723,22 @@ app.get('/api/video-archival/related-reels', authenticateToken, async (req, res)
   }
 });
 
-
 // 2. UPDATE: GET UNUSED SATSANGS (Include MLUniqueID and Locks)
 app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
-    const search = req.query.search;
+    
+    // 1. EXTRACT ALL PARAMS
+    const { 
+      search, 
+      Yr, 
+      EventName, 
+      Topic, 
+      ProductionBucket, 
+      MLUniqueID 
+    } = req.query;
 
     const usedIdsSubQuery = `
       SELECT DISTINCT child_nml.EventRefMLID
@@ -10621,7 +10762,7 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
 
     const filterParams = [];
 
-    // SEARCH FILTER
+    // 2. GLOBAL SEARCH (Existing)
     if (search) {
       const s = `%${search}%`;
       whereClause += ` AND (
@@ -10634,12 +10775,41 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
       filterParams.push(s, s, s, s, s);
     }
 
+    // 3. NEW SPECIFIC FILTERS
+    // Note: We use the aliases defined in THIS query (nml, dr, e)
+
+    if (Yr && Yr.trim() !== '') {
+      whereClause += " AND e.Yr = ?";
+      filterParams.push(Yr.trim());
+    }
+
+    if (EventName && EventName.trim() !== '') {
+      whereClause += " AND e.EventName LIKE ?";
+      filterParams.push(`%${EventName.trim()}%`);
+    }
+
+    if (Topic && Topic.trim() !== '') {
+      whereClause += " AND nml.Topic LIKE ?";
+      filterParams.push(`%${Topic.trim()}%`);
+    }
+
+    if (ProductionBucket && ProductionBucket.trim() !== '') {
+      whereClause += " AND dr.ProductionBucket LIKE ?";
+      filterParams.push(`%${ProductionBucket.trim()}%`);
+    }
+
+    if (MLUniqueID && MLUniqueID.trim() !== '') {
+      whereClause += " AND nml.MLUniqueID = ?";
+      filterParams.push(MLUniqueID.trim());
+    }
+
+    // 4. COMBINE PARAMS
     const dataParams = [...filterParams, limit, offset];
 
     const query = `
       SELECT
         nml.MLUniqueID,
-        nml.MLUniqueID AS EventRefMLID, -- For unused, the source IS the item itself
+        nml.MLUniqueID AS EventRefMLID, 
         nml.ContentFrom,
         nml.CounterFrom,
         nml.CounterTo,
@@ -10652,6 +10822,7 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
         nml.Topic,
         dr.Dimension,
         dr.ProductionBucket,
+        dr.RecordingName,
         e.EventName,
         e.EventCode,
         e.Yr,
