@@ -3973,7 +3973,7 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       // If your Google Sheet actually has Logchats in AJ, change "AE" to "AJ".
       await googleSheets.spreadsheets.values.update({
         spreadsheetId,
-      range: `${sheetName}!AF${rowNumber}`, // Targeting Column AF (Logchats)
+      range: `${sheetName}!AD${rowNumber}`, // Targeting Column AF (Logchats)
         valueInputOption: "USER_ENTERED",
         resource: {
           values: [[body.Logchats || ""]]
@@ -3983,14 +3983,13 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       return res.status(200).json({ message: "Chat updated in Google Sheet." });
     } 
 
-    // 4. IF NOT EXISTS: APPEND NEW ROW
-    const row = [
+     const row = [
       body.fkEventCode || "",      // A
       body.EventName || "",        // B
       body.Yr || "",               // C
       body.NewEventCategory || "", // D
       body.RecordingName || "",    // E
-      body.RecordingCode || "",    // F  <-- This matches the search logic above
+      body.RecordingCode || "",    // F
       body.Duration || "",         // G
       body.Filesize || "",         // H
       body.FilesizeInBytes || "",  // I
@@ -4002,23 +4001,20 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       body.PreservationStatus || "", // O
       body.RecordingRemarks || "", // P
       body.MLUniqueID || "",       // Q
-      body.AudioWAVDRCode || "",   // R
-      body.AudioMP3DRCode || "",   // S
-      body.fkGranth || "",         // T
-      body.Number || "",           // U
-      body.Topic || "",            // V
-      body.ContentFrom || "",      // W
-      body.SatsangStart || "",     // X
-      body.SatsangEnd || "",       // Y
-      body.fkCity || "",           // Z
-      body.SubDuration || "",      // AA
-      body.Detail || "",           // AB
-      body.Remarks || "",          // AC
-      new Date().toISOString(),    // AD (Created Timestamp)
-      body.LastModifiedBy || (req.user && req.user.email) || "", // AE (Last Modified By - Wait, check logic below)
-      body.Logchats || ""          // AF (Logchats)
+      body.fkGranth || "",         // R
+      body.Number || "",           // S
+      body.Topic || "",            // T
+      body.ContentFrom || "",      // U
+      body.SatsangStart || "",     // V
+      body.SatsangEnd || "",       // W
+      body.fkCity || "",           // X
+      body.SubDuration || "",      // Y
+      body.Detail || "",           // Z
+      body.Remarks || "",          // AA
+      new Date().toISOString(),    // AB (Created Timestamp)
+      body.LastModifiedBy || (req.user && req.user.email) || "", // AC (Last Modified By)
+      body.Logchats || ""          // AD (Logchats)
     ];
-    
     // ⚠️ CRITICAL CORRECTION:
     // Counting your array elements above:
     // A=0, B=1 ... Z=25, AA=26, AB=27, AC=28, AD=29, AE=30, AF=31.
@@ -4111,7 +4107,7 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
     // 3. PREPARE THE UPDATED ROW DATA
     // This maps exactly to the columns used in your POST request to ensure alignment.
     // We update everything from Column A to AF to ensure all metadata edits are saved.
-    const updatedRow = [
+ const updatedRow = [
       body.fkEventCode || "",      // A
       body.EventName || "",        // B
       body.Yr || "",               // C
@@ -4129,21 +4125,19 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
       body.PreservationStatus || "", // O
       body.RecordingRemarks || "", // P
       body.MLUniqueID || "",       // Q
-      body.AudioWAVDRCode || "",   // R
-      body.AudioMP3DRCode || "",   // S
-      body.fkGranth || "",         // T
-      body.Number || "",           // U
-      body.Topic || "",            // V
-      body.ContentFrom || "",      // W
-      body.SatsangStart || "",     // X
-      body.SatsangEnd || "",       // Y
-      body.fkCity || "",           // Z
-      body.SubDuration || "",      // AA
-      body.Detail || "",           // AB
-      body.Remarks || "",          // AC
-      new Date().toISOString(),    // AD (Last Modified Date)
-      body.LastModifiedBy || (req.user && req.user.email) || "System", // AE
-      body.Logchats || ""          // AF
+      body.fkGranth || "",         // R
+      body.Number || "",           // S
+      body.Topic || "",            // T
+      body.ContentFrom || "",      // U
+      body.SatsangStart || "",     // V
+      body.SatsangEnd || "",       // W
+      body.fkCity || "",           // X
+      body.SubDuration || "",      // Y
+      body.Detail || "",           // Z
+      body.Remarks || "",          // AA
+      new Date().toISOString(),    // AB (Last Modified Date)
+      body.LastModifiedBy || (req.user && req.user.email) || "System", // AC
+      body.Logchats || ""          // AD
     ];
 
     // 4. PERFORM THE UPDATE
@@ -4203,10 +4197,10 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
 
       if (data.Masterquality === "Audio - High Res") {
         updateField = "AudioWAVDRCode";
-        updateValue = data.AudioWAVDRCode;
+        updateValue = data.RecordingCode;
       } else if (data.Masterquality === "Audio - Low Res") {
         updateField = "AudioMP3DRCode";
-        updateValue = data.AudioMP3DRCode;
+        updateValue = data.RecordingCode;
       }
 
       if (updateField && updateValue) {
