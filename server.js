@@ -4118,37 +4118,34 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
       body.Filesize || "",         // H
       body.FilesizeInBytes || "",  // I
       body.fkMediaName || "",      // J
-      body.BitRate || "",          // K
-      body.NoOfFiles || "",        // L
-      body.AudioBitrate || "",     // M
-      body.Masterquality || "",    // N
-      body.PreservationStatus || "", // O
-      body.RecordingRemarks || "", // P
-      body.MLUniqueID || "",       // Q
-      body.fkGranth || "",         // R
-      body.Number || "",           // S
-      body.Topic || "",            // T
-      body.ContentFrom || "",      // U
-      body.SatsangStart || "",     // V
-      body.SatsangEnd || "",       // W
-      body.fkCity || "",           // X
-      body.SubDuration || "",      // Y
-      body.Detail || "",           // Z
-      body.Remarks || "",          // AA
-      new Date().toISOString(),    // AB (Last Modified Date)
-      body.LastModifiedBy || (req.user && req.user.email) || "System", // AC
-      body.Logchats || ""          // AD
-    ];
+      // BitRate column removed here
+      body.NoOfFiles || "",        // K  (was L)
+      body.AudioBitrate || "",     // L
+      body.Masterquality || "",    // M
+      body.PreservationStatus || "", // N
+      body.RecordingRemarks || "", // O
+      body.MLUniqueID || "",       // P
+      body.fkGranth || "",         // Q
+      body.Number || "",           // R
+      body.Topic || "",            // S
+      body.ContentFrom || "",      // T
+      body.SatsangStart || "",     // U
+      body.SatsangEnd || "",       // V
+      body.fkCity || "",           // W
+      body.SubDuration || "",      // X
+      body.Detail || "",           // Y
+      body.Remarks || "",          // Z
+      new Date().toISOString(),    // AA
+      body.LastModifiedBy || (req.user && req.user.email) || "System", // AB
+      body.Logchats || ""          // AC
+];
 
-    // 4. PERFORM THE UPDATE
-    await googleSheets.spreadsheets.values.update({
+await googleSheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A${rowNumber}:AF${rowNumber}`, // Updates the specific row
+      range: `${sheetName}!A${rowNumber}:AC${rowNumber}`, // now ends at AC
       valueInputOption: "USER_ENTERED",
-      resource: {
-        values: [updatedRow]
-      }
-    });
+      resource: { values: [updatedRow] }
+});
 
     res.status(200).json({ message: "Entry updated successfully in Google Sheet." });
 
@@ -4163,27 +4160,41 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
   try {
     const data = req.body;
 
-    await connection.beginTransaction();
-     transactionStarted = true;
+    // uppercase the media name before inserting
+    const fkMediaName = data.fkMediaName ? String(data.fkMediaName).toUpperCase() : null;
 
-    // Insert into DigitalRecordings with auto-filled LastModifiedBy and LastModifiedTimestamp
+    await connection.beginTransaction();
+    transactionStarted = true;
+
     const insertQuery = `
       INSERT INTO DigitalRecordings (
-        fkEventCode, RecordingName, RecordingCode, Duration, 
-        BitRate,  Masterquality, fkMediaName, Filesize, FilesizeInBytes,
+        fkEventCode, RecordingName, RecordingCode, Duration,
+        Masterquality, fkMediaName, Filesize, FilesizeInBytes,
         NoOfFiles, RecordingRemarks,
-         AudioBitrate, AudioTotalDuration,  PreservationStatus, 
-          LastModifiedTimestamp
-      ) VALUES ( ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        AudioBitrate, AudioTotalDuration,
+        PreservationStatus,
+        LastModifiedTimestamp
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        'Preserve',
+        NOW()
+      )
     `;
 
     const insertParams = [
-      data.fkEventCode, data.RecordingName, data.RecordingCode, data.Duration, 
-      data.BitRate, data.Masterquality, data.fkMediaName, data.Filesize, data.FilesizeInBytes,
-      data.NoOfFiles, data.RecordingRemarks, 
-      data.fkDigitalMasterCategory, data.AudioBitrate,
-      data.AudioTotalDuration, data.PreservationStatus,
-       // Auto-fill LastModifiedBy
+      data.fkEventCode,
+      data.RecordingName,
+      data.RecordingCode,
+      data.Duration,
+      data.Masterquality,
+      fkMediaName,                  // ← upper‑cased value
+      data.Filesize,
+      data.FilesizeInBytes,
+      data.NoOfFiles,
+      data.RecordingRemarks,
+      data.fkDigitalMasterCategory,
+      data.AudioBitrate,
+      data.AudioTotalDuration
     ];
 
     await connection.query(insertQuery, insertParams);
@@ -5248,26 +5259,35 @@ app.get('/api/recording-options', async (req, res) => {
 // ...existing code...
 app.get('/api/ml-unique-id/options', async (req, res) => {
   try {
-    // Fetch MLUniqueID and all fields needed for auto-fill
-    const query = `
-      SELECT DISTINCT 
-        MLUniqueID, 
-        CONCAT_WS(' - ', Detail, SubDetail) AS Detail,
-        fkGranth,
-        Number,
-        Topic,
-        ContentFrom,
-        SatsangStart,
-        SatsangEnd,
-        fkCity,
-        SubDuration,
-        Remarks
-      FROM NewMediaLog
-      WHERE MLUniqueID IS NOT NULL AND TRIM(MLUniqueID) <> ''
-      ORDER BY MLUniqueID DESC
+    const { eventCode } = req.query;           // optional filter from client
+    const params = [];
+
+    let query = `
+      SELECT DISTINCT
+        nml.MLUniqueID,
+        CONCAT_WS(' - ', nml.Detail, nml.SubDetail) AS Detail,
+        nml.fkGranth,
+        nml.Number,
+        nml.Topic,
+        nml.ContentFrom,
+        nml.SatsangStart,
+        nml.SatsangEnd,
+        nml.fkCity,
+        nml.SubDuration,
+        nml.Remarks
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr
+        ON nml.fkDigitalRecordingCode = dr.RecordingCode
     `;
-    const [rows] = await db.query(query);
-    // Optionally, rename DetailRaw to Detail if you want both the concatenated and raw value
+
+    if (eventCode && eventCode.trim() !== '') {
+      query += `WHERE dr.fkEventCode = ?\n`;
+      params.push(eventCode.trim());
+    }
+
+    query += `ORDER BY nml.MLUniqueID DESC`;
+
+    const [rows] = await db.query(query, params);
     res.status(200).json(rows);
   } catch (err) {
     console.error("❌ Error fetching ML Options:", err);
