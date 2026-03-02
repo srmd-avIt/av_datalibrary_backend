@@ -2554,50 +2554,29 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const cityVals = normalizeList(rawCity);
 
     // ---------------------------------------------------------
-    // 2. DATE FILTERING (UPDATED FOR MULTIPLE FORMATS)
+    // 2. DATE FILTERING (UPDATED FOR NewEventFrom / NewEventTo)
     // ---------------------------------------------------------
     const dateWhereParts = [];
     const dateParams = [];
 
-    const eventFromRaw = filters.FromDate;
-    const eventToRaw = filters.ToDate;
+    // Extract exactly what the frontend is sending
+    const eventFromRaw = filters.NewEventFrom; 
+    const eventToRaw = filters.NewEventTo;     
     const contentFromRaw = filters.ContentFrom; 
 
-    // Remove from generic filters
-    delete filters.FromDate;
-    delete filters.ToDate;
+    // CRITICAL: Delete these from generic filters so `buildWhereClause` ignores them
+    delete filters.NewEventFrom; 
+    delete filters.NewEventTo;   
     delete filters.ContentFrom;
-    delete filters.ContentTo; 
-
+    delete filters.ContentTo;
+    
     /**
-     * Helper: Parses various date input formats into MySQL standard 'YYYY-MM-DD'
-     * Supported Inputs:
-     * 1. dd-Mon-yy (22-Nov-10)
-     * 2. dd.mm.yyyy (22.11.2010)
-     * 3. dd/mm/yyyy (22/11/2010)
-     * 4. dd-mm-yyyy (22-11-2010)
-     * 5. yyyy-mm-dd (2010-11-22)
+     * Helper: Parses frontend dd-mm-yyyy to standard MySQL YYYY-MM-DD
      */
     const parseDateInput = (input) => {
         if (!input) return null;
         const trimmed = input.trim();
         
-        // 1. Handle dd-Mon-yy OR dd-Mon-yyyy (e.g. 22-Nov-10)
-        const namedMonthRegex = /^(\d{1,2})-([a-zA-Z]{3})-(\d{2,4})$/;
-        const namedMatch = trimmed.match(namedMonthRegex);
-        if (namedMatch) {
-            const monMap = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
-            const d = namedMatch[1].padStart(2, '0');
-            const mStr = namedMatch[2].toLowerCase();
-            let y = namedMatch[3];
-            if (y.length === 2) y = '20' + y; // Assume 20xx
-            const m = monMap[mStr];
-            if (m) return `${y}-${m}-${d}`;
-        }
-
-        // 2. Handle Numeric Formats with separators (., /, -)
-        // This covers: dd.mm.yyyy, dd-mm-yyyy, dd/mm/yyyy
-        // Logic assumes Day-Month-Year (DMY) preference
         const numericRegex = /^(\d{1,2})[\.\-\/](\d{1,2})[\.\-\/](\d{4})$/;
         const numMatch = trimmed.match(numericRegex);
         if (numMatch) {
@@ -2605,31 +2584,28 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
             return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
         }
         
-        // 3. Handle ISO YYYY-MM-DD
         if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-        
         return null;
     };
 
-    // A. ContentFrom - Exact String Match (Unchanged)
+    // A. ContentFrom - Exact String Match
     if (contentFromRaw) {
       dateWhereParts.push('nml.ContentFrom = ?');
       dateParams.push(contentFromRaw);
     }
 
-    // B. Event From Date
-    const formattedFromDate = parseDateInput(eventFromRaw);
-    if (formattedFromDate) {
-      // Compares DB Date (parsed from '24-Jul-05') against User Date ('2005-07-24')
-      dateWhereParts.push("STR_TO_DATE(e.FromDate, '%d-%b-%y') >= ?");
-      dateParams.push(formattedFromDate);
+    // B. NEW Event From Date (Converts DB string 'dd-mm-yyyy' to real date for comparison)
+    const formattedEventFrom = parseDateInput(eventFromRaw);
+    if (formattedEventFrom) {
+      dateWhereParts.push("COALESCE(STR_TO_DATE(e.NewEventFrom, '%d-%m-%Y'), DATE(e.NewEventFrom)) >= ?");
+      dateParams.push(formattedEventFrom);
     }
- 
-    // C. Event To Date
-    const formattedToDate = parseDateInput(eventToRaw);
-    if (formattedToDate) {
-      dateWhereParts.push("STR_TO_DATE(e.FromDate, '%d-%b-%y') <= ?");
-      dateParams.push(formattedToDate);
+
+    // C. NEW Event To Date (Converts DB string 'dd-mm-yyyy' to real date for comparison)
+    const formattedEventTo = parseDateInput(eventToRaw);
+    if (formattedEventTo) {
+      dateWhereParts.push("COALESCE(STR_TO_DATE(e.NewEventTo, '%d-%m-%Y'), DATE(e.NewEventTo)) <= ?");
+      dateParams.push(formattedEventTo);
     }
 
     const dateWhere = dateWhereParts.length > 0 ? dateWhereParts.join(' AND ') : '';
@@ -2649,7 +2625,8 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
       'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
       'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
-      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode'
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode', 
+      'NewEventFrom', 'NewEventTo' // <-- ADDED SO THEY CAN BE SORTED
     ];
     
     const aliases = {
@@ -2665,6 +2642,8 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       EventCode: 'e',
       Yr: 'e',
       NewEventCategory: 'e',
+      NewEventFrom: 'e', // <-- ALIAS ADDED
+      NewEventTo: 'e',   // <-- ALIAS ADDED
       LastModifiedTimestamp: 'nml',
       LastModifiedBy: 'nml'
     };
@@ -2679,28 +2658,18 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const locationParams = [];
     const orConditions = [];
 
-    // A. City always acts as an OR condition
     if (cityVals.length > 0) {
         orConditions.push(`nml.fkCity IN (?)`);
         locationParams.push(cityVals);
     }
 
-    // B. Country & State Interaction
     if (countryVals.length > 0 && stateVals.length > 0) {
         if (countryVals.length === 1) {
             orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
             locationParams.push(countryVals, stateVals);
         } else {
-            const subQuery = `
-                SELECT 1 FROM NewMediaLog sub 
-                WHERE sub.fkCountry = nml.fkCountry 
-                AND sub.fkState IN (?)
-            `;
-            orConditions.push(`(
-                (nml.fkCountry IN (?) AND nml.fkState IN (?)) 
-                OR 
-                (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery}))
-            )`);
+            const subQuery = `SELECT 1 FROM NewMediaLog sub WHERE sub.fkCountry = nml.fkCountry AND sub.fkState IN (?)`;
+            orConditions.push(`((nml.fkCountry IN (?) AND nml.fkState IN (?)) OR (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery})))`);
             locationParams.push(countryVals, stateVals, countryVals, stateVals);
         }
     } 
@@ -2736,8 +2705,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       nml.\`Segment Category\` IN (
         'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
         'Satsang', 'Informal Satsang', 'Pravachan','Product/Webseries',
-        'SU - Extracted',
-        'Satsang Clips','SU - Capsule'
+        'SU - Extracted', 'Satsang Clips','SU - Capsule'
       )
       AND (
         dr.PreservationStatus IS NULL
@@ -2757,13 +2725,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     if (locationWhere) whereParts.push(locationWhere);
 
     const finalWhere = 'WHERE ' + whereParts.join(' AND ');
-    
-    const finalParams = [
-        ...dynamicParams, 
-        ...dateParams, 
-        ...extraParams, 
-        ...locationParams 
-    ];
+    const finalParams = [...dynamicParams, ...dateParams, ...extraParams, ...locationParams];
 
     // --- COUNT QUERY ---
     const countQuery = `
@@ -2823,7 +2785,6 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
         nml.SatsangStart,
         nml.SatsangEnd,
         nml.AudioMP3DRCode,
-        nml.fkCity,
         nml.LastModifiedTimestamp,
         nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
@@ -2832,6 +2793,8 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
+        e.NewEventFrom AS NewEventFrom,      -- <-- CRITICAL FIX: Add to SELECT
+        e.NewEventTo AS NewEventTo,          -- <-- CRITICAL FIX: Add to SELECT
         e.NewEventCategory AS NewEventCategory,
         ec.EventCategory AS EventCategoryName,
         CONCAT(
@@ -2865,12 +2828,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
 
     res.json({
       data: rows,
-      pagination: {
-        page,
-        limit,
-        totalItems: total,
-        totalPages
-      }
+      pagination: { page, limit, totalItems: total, totalPages }
     });
   } catch (err) {
     console.error("❌ API Error for /api/newmedialog/satsang-dashboard:", err);
