@@ -2533,15 +2533,17 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     let filters = { ...req.query };
 
     // ---------------------------------------------------------
-    // 1. EXTRACT LOCATION FILTERS
+    // 1. EXTRACT LOCATION & OCCASION FILTERS
     // ---------------------------------------------------------
     const rawCountry = filters.fkCountry;
     const rawState = filters.fkState;
     const rawCity = filters.fkCity;
+    const rawOccasion = filters.fkOccasion; // <-- ADDED
 
     delete filters.fkCountry;
     delete filters.fkState;
     delete filters.fkCity;
+    delete filters.fkOccasion; // <-- ADDED
 
     const normalizeList = (val) => {
         if (!val) return [];
@@ -2552,6 +2554,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const countryVals = normalizeList(rawCountry);
     const stateVals = normalizeList(rawState);
     const cityVals = normalizeList(rawCity);
+    const occasionVals = normalizeList(rawOccasion); // <-- ADDED
 
     // ---------------------------------------------------------
     // 2. DATE FILTERING (UPDATED FOR NewEventFrom / NewEventTo)
@@ -2652,7 +2655,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
 
     // ---------------------------------------------------------
-    // 4. CONDITIONAL LOCATION LOGIC
+    // 4. CONDITIONAL LOCATION & OCCASION LOGIC
     // ---------------------------------------------------------
     let locationWhere = '';
     const locationParams = [];
@@ -2684,6 +2687,14 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
 
     if (orConditions.length > 0) {
         locationWhere = `(${orConditions.join(' OR ')})`;
+    }
+
+    // Occasion logic
+    const occasionParams = [];
+    let occasionWhere = '';
+    if (occasionVals.length > 0) {
+        occasionWhere = `nml.fkOccasion IN (?)`;
+        occasionParams.push(occasionVals);
     }
 
     // ---------------------------------------------------------
@@ -2723,9 +2734,10 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     if (staticWhere) whereParts.push(staticWhere);
     if (extraWhere) whereParts.push(extraWhere);
     if (locationWhere) whereParts.push(locationWhere);
+    if (occasionWhere) whereParts.push(occasionWhere); // <-- ADDED
 
     const finalWhere = 'WHERE ' + whereParts.join(' AND ');
-    const finalParams = [...dynamicParams, ...dateParams, ...extraParams, ...locationParams];
+    const finalParams = [...dynamicParams, ...dateParams, ...extraParams, ...locationParams, ...occasionParams]; // <-- ADDED
 
     // --- COUNT QUERY ---
     const countQuery = `
@@ -2793,8 +2805,8 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
         e.EventName,
         e.EventCode,
         e.Yr AS Yr,
-        e.NewEventFrom AS NewEventFrom,      -- <-- CRITICAL FIX: Add to SELECT
-        e.NewEventTo AS NewEventTo,          -- <-- CRITICAL FIX: Add to SELECT
+        e.NewEventFrom AS NewEventFrom,
+        e.NewEventTo AS NewEventTo,
         e.NewEventCategory AS NewEventCategory,
         ec.EventCategory AS EventCategoryName,
         CONCAT(
@@ -5553,6 +5565,53 @@ app.get("/api/users/wisdom-list", authenticateToken, async (_req, res) => {
         if (user.permissions && Array.isArray(user.permissions)) {
             return user.permissions.some(p => 
                 p.resource === 'Wisdom Reels Archival' && 
+                (p.actions.includes('read') || p.actions.includes('write'))
+            );
+        }
+
+        return false;
+    });
+
+    // 3. Return simplified object
+    const responseData = wisdomUsers.map(u => ({
+        name: u.name,
+        email: u.email
+    }));
+
+    res.json(responseData);
+
+  } catch (err) {
+    console.error("Error fetching wisdom users:", err);
+    res.status(500).json({ error: "Failed to fetch wisdom user list." });
+  }
+});
+
+app.get("/api/users/submitters-ml-list", authenticateToken, async (_req, res) => {
+  try {
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+    
+    // 1. Fetch all users
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: "Sheet1!A2:K", 
+    });
+
+    const allUsers = (result.data.values || []).map(row => ({
+      name: row[1],
+      email: row[2],
+      // Make sure this index matches your Permissions column (K = 10, J = 9)
+      permissions: parsePermissions(row[10]) 
+    }));
+
+    // 2. FILTER: Only show users with EXPLICIT permission
+    const wisdomUsers = allUsers.filter(user => {
+        
+        // REMOVED: The check for 'Admin' or 'Owner'
+        
+        // STRICT CHECK: Does the user have the specific resource permission?
+        if (user.permissions && Array.isArray(user.permissions)) {
+            return user.permissions.some(p => 
+                p.resource === 'Submitters ML' && 
                 (p.actions.includes('read') || p.actions.includes('write'))
             );
         }
@@ -11525,10 +11584,7 @@ app.get('/api/ml-summary-event-code', authenticateToken, async (req, res) => {
   }
 });
 
-// --- NEW ENDPOINT: Search Global Details (Extensive Search) ---
-// --- NEW ENDPOINT: Search Global Details (Extensive Search) ---
-// --- NEW ENDPOINT: Search Global Details (Extensive Search - ALL COLUMNS) ---
-// --- NEW ENDPOINT: Search Global Details (Extensive Search - ALL COLUMNS) ---
+
 // --- NEW ENDPOINT: Extensive Search (All NewMediaLog Table Columns) ---
 app.get('/api/search-details-global', authenticateToken, async (req, res) => {
   try {
