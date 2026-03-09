@@ -8,7 +8,10 @@ const { GoogleAuth } = require('google-auth-library');
 const nodemailer = require("nodemailer");
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// INCREASE LIMIT TO 500MB FOR MASSIVE EXPORTS
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
 const jwt = require('jsonwebtoken');
 const allowedOrigins = [
@@ -376,6 +379,115 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {})
   }).filter(Boolean);
 
   return orderByParts.length > 0 ? `ORDER BY ${orderByParts.join(', ')}` : '';
+};
+
+// --- HELPER: Maps incoming JSON body dynamically to the Google Sheet columns ---
+// --- HELPER: Maps incoming JSON body dynamically, PRESERVING existing data ---
+const mapBodyToRow = (body, headers, existingRow = [], userEmail = "System") => {
+  // Start with the existing row data to prevent wiping out unmapped columns
+  const row = headers.map((_, i) => existingRow[i] !== undefined ? existingRow[i] : "");
+  
+  headers.forEach((h, index) => {
+      const header = (h || "").trim().toLowerCase();
+      
+      if (header === "event code" || header === "eventcode" || header === "fkeventcode") 
+          row[index] = body.fkEventCode || body.EventCode || row[index];
+          
+      else if (header === "event name" || header === "eventname" || header === "recording name" || header === "recordingname") 
+          row[index] = body.EventName || body.RecordingName || row[index];
+          
+      else if (header === "year" || header === "yr") 
+          row[index] = body.Yr || row[index];
+          
+      else if (header === "digital master category" || header === "neweventcategory") 
+          row[index] = body.NewEventCategory || row[index];
+          
+      else if (header === "recording code" || header === "recordingcode") 
+          row[index] = body.RecordingCode || row[index];
+          
+      else if (header === "duration") 
+          row[index] = body.Duration || row[index];
+          
+      else if (header === "file size" || header === "filesize") 
+          row[index] = body.Filesize || row[index];
+          
+      else if (header === "file size (bytes)" || header === "filesizeinbytes") 
+          row[index] = body.FilesizeInBytes || row[index];
+          
+      else if (header === "media name" || header === "fkmedianame" || header === "medianame") 
+          row[index] = body.fkMediaName || row[index];
+          
+      else if (header === "number of files" || header === "nooffiles") 
+          row[index] = body.NoOfFiles || row[index];
+          
+      else if (header === "audio bitrate" || header === "audiobitrate") 
+          row[index] = body.AudioBitrate || row[index];
+          
+      else if (header === "master quality" || header === "masterquality") 
+          row[index] = body.Masterquality || row[index];
+          
+      else if (header === "preservation status" || header === "preservationstatus") 
+          row[index] = body.PreservationStatus || row[index];
+          
+      else if (header === "recording remarks" || header === "recordingremarks") 
+          row[index] = body.RecordingRemarks || row[index];
+          
+      else if (header === "ml unique id" || header === "mluniqueid") 
+          row[index] = body.MLUniqueID || row[index];
+          
+      else if (header === "audio wav dr code" || header === "audiowavdrcode") 
+          row[index] = body.AudioWAVDRCode || row[index];
+          
+      else if (header === "audio mp3 dr code" || header === "audiomp3drcode") 
+          row[index] = body.AudioMP3DRCode || row[index];
+          
+      else if (header === "fkgranth" || header === "granth") 
+          row[index] = body.fkGranth || row[index];
+          
+      else if (header === "number" || header === "patrank") 
+          row[index] = body.Number || row[index];
+          
+      else if (header === "topic") 
+          row[index] = body.Topic || row[index];
+          
+      else if (header === "date from" || header === "contentfrom") 
+          row[index] = body.ContentFrom || row[index];
+          
+      else if (header === "satsang start" || header === "satsangstart") 
+          row[index] = body.SatsangStart || row[index];
+          
+      else if (header === "satsang end" || header === "satsangend") 
+          row[index] = body.SatsangEnd || row[index];
+          
+      else if (header === "city" || header === "fkcity") 
+          row[index] = body.fkCity || row[index];
+          
+      else if (header === "sub duration" || header === "subduration") 
+          row[index] = body.SubDuration || row[index];
+          
+      else if (header === "detail") 
+          row[index] = body.Detail || row[index];
+          
+      else if (header === "remarks") 
+          row[index] = body.Remarks || row[index];
+          
+      else if (header === "createdtimestamp" || header === "created timestamp") 
+          row[index] = existingRow[index] || body.CreatedTimestamp || new Date().toISOString();
+          
+      else if (header === "lastmodifiedtimestamp" || header === "last modified timestamp") 
+          row[index] = new Date().toISOString(); // Auto-update Timestamp
+          
+      else if (header === "last modified by" || header === "lastmodifiedby") 
+          row[index] = body.LastModifiedBy || userEmail;
+          
+      else if (header === "logchats") 
+          row[index] = body.Logchats !== undefined ? body.Logchats : row[index];
+          
+      else if (header === "qc status" || header === "qcstatus") 
+          row[index] = body.QcStatus || body["QC Status"] || row[index];
+  });
+
+  return row;
 };
 
 app.get('/api/non-event-production', authenticateToken, async (req, res) => {
@@ -2080,12 +2192,183 @@ const SegmentCategory = req.body['Segment Category'];
   }
 });
 
+// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
+// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
+// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
+// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
+app.post('/api/external-departments/push', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' && req.user.role !== 'Owner') {
+      return res.status(403).json({ error: "Access denied. Only Admins or Owners can perform this action." });
+    }
+
+    const { viewId, idKey, keys, labels, rows } = req.body;
+    const spreadsheetId = "1ghwQiGhCTN721JbSFUSL8S1MWS7SXnOOEM4JiDJPmPI";
+
+    let pushTasks = [];
+
+    // --- ROBUST FILTER HELPERS ---
+    // Standard substring match
+    const contains = (val, search) => (val || "").toString().toLowerCase().includes(search.toLowerCase());
+    
+    // Safely checks if a comma-separated string contains a specific SUBSTRING tag
+    const containsTag = (val, search) => {
+        if (!val) return false;
+        const tags = val.toString().split(',').map(s => s.trim().toLowerCase());
+        return tags.some(t => t.includes(search.toLowerCase()));
+    };
+
+    // Safely checks if a comma-separated string contains an EXACT tag 
+    const hasTag = (val, exact) => {
+        if (!val) return false;
+        const tags = val.toString().split(',').map(s => s.trim().toLowerCase());
+        return tags.includes(exact.toLowerCase());
+    };
+
+    // --- ROUTING LOGIC ---
+    if (viewId === "medialog_satsang_category") {
+      // 1. Base Push: All data from this view goes to its main tab
+     
+      
+      // 2. Filter: PS (Contains Pravachan, City contains Mumbai)
+      const psRows = rows.filter(r => containsTag(r["Segment Category"], 'Pravachan') && contains(r["fkCity"], 'Mumbai'));
+      if (psRows.length > 0) pushTasks.push({ sheetName: "PS", filteredRows: psRows });
+
+      // 3. Filter: SU (EXACT 'SU' or EXACT 'SU - Revision' so we don't accidentally catch SU - GM)
+      const suRows = rows.filter(r => hasTag(r["Segment Category"], 'SU') || hasTag(r["Segment Category"], 'SU - Revision'));
+      if (suRows.length > 0) pushTasks.push({ sheetName: "SU", filteredRows: suRows });
+
+      // 4. Filter: Dyatra Satsangs (Contains Pravachan or Exact SU, NOT Mumbai)
+      const dyatraRows = rows.filter(r => (containsTag(r["Segment Category"], 'Pravachan') || hasTag(r["Segment Category"], 'SU')) && !contains(r["fkCity"], 'Mumbai'));
+      if (dyatraRows.length > 0) pushTasks.push({ sheetName: "Dyatra Satsangs", filteredRows: dyatraRows });
+
+      // 5. Filter: GM (PPG Approved) (Contains SU - GM, Masterquality High)
+      const gmRows = rows.filter(r => containsTag(r["Segment Category"], 'SU - GM') && contains(r["Masterquality"], 'High'));
+      if (gmRows.length > 0) pushTasks.push({ sheetName: "GM (PPG Approved)", filteredRows: gmRows });
+
+      // 6. Filter: Prasangik Udbodhan (Contains Prasangik, High Res OR Low Res)
+      const prasangikRows = rows.filter(r => containsTag(r["Segment Category"], 'Prasangik') && (contains(r["Masterquality"], 'Video - High Res') || contains(r["Masterquality"], 'Only Low Res')));
+      if (prasangikRows.length > 0) pushTasks.push({ sheetName: "Prasangik Udbodhan", filteredRows: prasangikRows });
+
+    } else if (viewId === "medialog_all") {
+      
+      // Filter: Nemiji Sessions (Remains here if you want it from medialog_all)
+      const nemijiRows = rows.filter(r => 
+        (hasTag(r["Segment Category"], 'Nemiji:Satsang') || hasTag(r["Segment Category"], 'SRMD - Shibirs/Session/Training/Workshops')) &&
+        contains(r["SpeakerSinger"], 'Nemi') &&
+        (contains(r["Masterquality"], 'Video - High Res') || contains(r["Masterquality"], 'Only Low Res'))
+      );
+      if (nemijiRows.length > 0) pushTasks.push({ sheetName: "Nemiji Sessions", filteredRows: nemijiRows });
+
+    } else {
+      return res.status(400).json({ error: "Invalid viewId for external push." });
+    }
+
+    if (pushTasks.length === 0) {
+      return res.status(200).json({ message: "No records matched the criteria for any external tabs.", added: 0, pushedEntries: [] });
+    }
+
+    const auth = new GoogleAuth({
+      credentials: {
+        type: process.env.SERVICE_ACCOUNT_TYPE,
+        project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+        private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+        private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+        client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      },
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+
+    let totalAdded = 0;
+    let pushedEntriesSet = new Set();
+
+    for (const task of pushTasks) {
+      const { sheetName, filteredRows } = task;
+
+      const getRes = await googleSheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: sheetName,
+      }).catch(err => {
+        throw new Error(`Could not find tab: "${sheetName}". Please ensure this tab exists.`);
+      });
+
+      const existingValues = getRes.data.values || [];
+      let existingIds = new Set();
+      let sheetHeaders = [];
+      let appendData = [];
+
+      const idLabel = "System_ID";
+      const finalHeaders = [...labels, idLabel];
+
+      if (existingValues.length === 0) {
+        sheetHeaders = finalHeaders;
+        appendData.push(sheetHeaders);
+      } else {
+        sheetHeaders = existingValues[0];
+        const idIndex = sheetHeaders.indexOf(idLabel);
+        if (idIndex !== -1) {
+          for (let i = 1; i < existingValues.length; i++) {
+            if (existingValues[i][idIndex]) existingIds.add(existingValues[i][idIndex].toString().trim());
+          }
+        }
+      }
+
+      for (const rowObj of filteredRows) {
+        const rowIdVal = rowObj[idKey] ? rowObj[idKey].toString().trim() : null;
+        if (rowIdVal && existingIds.has(rowIdVal)) continue;
+
+        const rowArray = sheetHeaders.map(h => {
+           if (h === idLabel) return rowIdVal || "";
+           const labelIndex = labels.indexOf(h);
+           if (labelIndex !== -1) {
+             const k = keys[labelIndex];
+             const val = rowObj[k];
+             return val !== null && val !== undefined ? String(val) : "";
+           }
+           return "";
+        });
+        
+        appendData.push(rowArray);
+        if (rowIdVal) {
+          existingIds.add(rowIdVal);
+          pushedEntriesSet.add(rowIdVal); 
+        }
+        totalAdded++;
+      }
+
+      if (appendData.length > 0) {
+        await googleSheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: sheetName,
+          valueInputOption: "USER_ENTERED",
+          resource: { values: appendData }
+        });
+      }
+    }
+
+    res.status(200).json({ 
+      message: "Successfully pushed data.", 
+      added: totalAdded,
+      pushedEntries: Array.from(pushedEntriesSet) 
+    });
+
+  } catch (err) {
+    console.error("❌ External Push Error:", err);
+    res.status(500).json({ error: "Failed to push to external sheet.", details: err.message });
+  }
+});
+ 
 
 
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 
 // ...existing code...
 // --- Corrected Endpoint for "Satsang Category" (Using your query) ---
+// --- Corrected Endpoint for "Satsang Category" ---
 app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -2124,6 +2407,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
     const cityVals = normalizeList(rawCity);
     // ---------------------------------------------------------
 
+    // --- DATE FILTERS ---
     let dateWhere = '';
     const dateParams = [];
 
@@ -2150,7 +2434,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
       'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
       'CounterFrom', 'CounterTo', 'SubDuration', 'TotalDuration', 'Language', 'SpeakerSinger', 'fkOrganization',
-      'Designation', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname',
+      'Designation', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname', 'fkCity','fkState','fkCountry',
       'SatsangStart', 'SatsangEnd', 'IsAudioRecorded', 'AudioMP3Distribution', 'AudioWAVDistribution',
       'AudioMP3DRCode', 'AudioWAVDRCode', 'Remarks', 'IsStartPage', 'EndPage', 'IsInformal', 'IsPPGNotPresent',
       'Guidance', 'DiskMasterDuration', 'EventRefRemarksCounters', 'EventRefMLID', 'EventRefMLID2',
@@ -2179,7 +2463,13 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       LastModifiedBy: 'nml'
     };
     
-    const searchFields = filterableColumns;
+    // FIX: Specify actual fields for the global search bar instead of throwing all 70 columns at it.
+    const searchFields = [
+      'MLUniqueID', 'Detail', 'SubDetail', 'Topic', 'SpeakerSinger', 
+      'RecordingName', 'EventName', 'EventCode', 'RecordingCode', 'ProductionBucket', 'DistributionDriveLink', 
+
+    ];
+
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
 
     // ---------------------------------------------------------
@@ -2197,42 +2487,26 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
 
     // B. Country & State Interaction
     if (countryVals.length > 0 && stateVals.length > 0) {
-        
         if (countryVals.length === 1) {
-            // CASE 1: Single Country Selected (e.g., ONLY USA)
-            // Strict AND Logic: If Country doesn't match State, return NOTHING.
             orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
             locationParams.push(countryVals, stateVals);
         } else {
-            // CASE 2: Multiple Countries Selected (e.g., India, USA)
-            // Smart Fallback Logic: 
-            // - If Country matches State (India+Gujarat) -> Show.
-            // - If Country doesn't contain State (USA+Gujarat) -> Show ALL USA (Independent result).
-            
             const subQuery = `
                 SELECT 1 FROM NewMediaLog sub 
                 WHERE sub.fkCountry = nml.fkCountry 
                 AND sub.fkState IN (?)
             `;
-            
             orConditions.push(`(
                 (nml.fkCountry IN (?) AND nml.fkState IN (?)) 
                 OR 
                 (nml.fkCountry IN (?) AND NOT EXISTS (${subQuery}))
             )`);
-            
-            // Params: Country, State, Country, SubQuery-State
             locationParams.push(countryVals, stateVals, countryVals, stateVals);
         }
-
-    } 
-    else if (countryVals.length > 0) {
-        // Only Country selected
+    } else if (countryVals.length > 0) {
         orConditions.push(`nml.fkCountry IN (?)`);
         locationParams.push(countryVals);
-    } 
-    else if (stateVals.length > 0) {
-        // Only State selected
+    } else if (stateVals.length > 0) {
         orConditions.push(`nml.fkState IN (?)`);
         locationParams.push(stateVals);
     }
@@ -2281,6 +2555,14 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
         ...locationParams 
     ];
 
+    // Identify which columns should be treated as Dates or Numbers for proper sorting
+    const dateColumns = ['ContentFrom', 'ContentTo', 'SatsangStart', 'SatsangEnd', 'LastModifiedTimestamp'];
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+
+    // Default sorting
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) 
+                          || 'ORDER BY nml.MLUniqueID DESC';
+
     // --- COUNT QUERY ---
     const countQuery = `
       SELECT COUNT(*) as total
@@ -2296,52 +2578,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
     // --- MAIN DATA QUERY ---
     const dataQuery = `
       SELECT
-        nml.MLUniqueID,
-        nml.FootageSrNo,
-        nml.LogSerialNo,
-        nml.fkDigitalRecordingCode,
-        nml.ContentFrom,
-        nml.ContentTo,
-        nml.TimeOfDay,
-        nml.fkOccasion,
-        nml.EditingStatus,
-        nml.FootageType,
-        nml.Remarks,
-        nml.Guidance,
-        nml.IsInformal,
-        nml.fkGranth,
-        nml.Number,
-        nml.Topic,
-        nml.Keywords,
-        nml.TopicgivenBy,
-        nml.IsDubbed,
-        nml.DubbedLanguage,
-        nml.DubbingArtist,
-        nml.SpeakerSinger,
-        nml.fkOrganization,
-        nml.Designation,
-        nml.fkCountry,
-        nml.fkState,
-        nml.fkCity,
-        nml.Venue,
-        nml.CounterFrom,
-        nml.CounterTo,
-        nml.TotalDuration,
-        nml.Detail,
-        nml.SubDetail,
-        nml.\`Segment Category\` ,
-        nml.TopicSource,
-        nml.SubDuration,
-        nml.Language,
-        nml.HasSubtitle,
-        nml.SubTitlesLanguage,
-        nml.Synopsis,
-        nml.SatsangStart,
-        nml.SatsangEnd,
-        nml.AudioMP3DRCode,
-        nml.fkCity,
-        nml.LastModifiedTimestamp,
-        nml.LastModifiedBy,
+        nml.*,
         dr.Masterquality AS Masterquality,
         dr.DistributionDriveLink AS DistributionDriveLink,
         dr.ProductionBucket AS ProductionBucket,
@@ -2375,7 +2612,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
       LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
       ${finalWhere}
-      ORDER BY nml.MLUniqueID DESC
+      ${orderByString}
       LIMIT ? OFFSET ?
     `;
     const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
@@ -3891,237 +4128,189 @@ app.get("/api/users/mention-list", authenticateToken, async (req, res) => {
   }
 });
 // --- ADD: POST endpoint to add Digital Recording to Google Sheet ---
+// --- POST: Add to Google Sheet (Safe check DR Code + ML ID) ---
+// --- POST: Add to Google Sheet ---
 app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
   try {
-    // 1. Setup Auth
-    const credentials = {
-      type: process.env.SERVICE_ACCOUNT_TYPE,
-      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
-      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
-      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
-      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
-      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
-      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
-      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
-      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
-    };
-
     const auth = new GoogleAuth({
-      credentials,
+      credentials: {
+        type: process.env.SERVICE_ACCOUNT_TYPE,
+        project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+        private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+        private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+        client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      },
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
 
     const client = await auth.getClient();
-    const googleSheets = require("googleapis").google.sheets({ version: "v4", auth: client });
+    const googleSheets = google.sheets({ version: "v4", auth: client });
     const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
     const sheetName = "Sheet1"; 
 
     const body = req.body || {};
-    const recordingCode = body.RecordingCode;
+    const recordingCode = (body.RecordingCode || "").trim();
+    const mlUniqueId = (body.MLUniqueID || "").trim();
 
-    // 2. CHECK IF ENTRY EXISTS
-    // ✅ FIX 1: Search Column F (Index 5) because that is where RecordingCode is stored
     const checkRes = await googleSheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!F:F`, 
+      range: `${sheetName}`, 
     });
     
-    const rows = checkRes.data.values;
+    const rows = checkRes.data.values || [];
+    if (rows.length === 0) return res.status(500).json({ error: "Sheet is empty." });
+
+    const headers = rows[0];
+    
+    const drCodeIndex = headers.findIndex(h => {
+        const cl = (h||"").trim().toLowerCase(); return cl === "recording code" || cl === "recordingcode";
+    });
+    const mlIdIndex = headers.findIndex(h => {
+        const cl = (h||"").trim().toLowerCase(); return cl === "ml unique id" || cl === "mluniqueid";
+    });
+    const logchatsIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "logchats");
+
     let existingRowIndex = -1;
 
-    if (rows && rows.length > 0) {
-      // Find the index (row number is index + 1)
-      existingRowIndex = rows.findIndex(r => r[0] === recordingCode);
+    if (rows.length > 1 && drCodeIndex !== -1) {
+      existingRowIndex = rows.findIndex((r, idx) => {
+          if (idx === 0) return false;
+          const matchDr = (r[drCodeIndex] || "").trim() === recordingCode;
+          const matchMl = mlIdIndex !== -1 ? (r[mlIdIndex] || "").trim() === mlUniqueId : true;
+          if (mlUniqueId !== "") return matchDr && matchMl;
+          return matchDr;
+      });
     }
 
-    // 3. IF EXISTS: UPDATE ONLY LOGCHATS
+    // IF EXISTS: Update just chat
     if (existingRowIndex !== -1) {
-      const rowNumber = existingRowIndex + 1; // Convert 0-based index to 1-based row
-      
-      // ✅ FIX 2: Update Column AE (Column 31) because that is where Logchats are stored in the array below
-      // If your Google Sheet actually has Logchats in AJ, change "AE" to "AJ".
+      const rowNumber = existingRowIndex + 1; 
+      const getColumnLetter = (colIndex) => {
+        let letter = '';
+        while (colIndex >= 0) {
+            letter = String.fromCharCode((colIndex % 26) + 65) + letter;
+            colIndex = Math.floor(colIndex / 26) - 1;
+        }
+        return letter;
+      };
+      const logchatsLetter = getColumnLetter(logchatsIndex !== -1 ? logchatsIndex : headers.length - 1);
+
       await googleSheets.spreadsheets.values.update({
         spreadsheetId,
-      range: `${sheetName}!AD${rowNumber}`, // Targeting Column AF (Logchats)
+        range: `${sheetName}!${logchatsLetter}${rowNumber}`, 
         valueInputOption: "USER_ENTERED",
-        resource: {
-          values: [[body.Logchats || ""]]
-        }
+        resource: { values: [[body.Logchats || ""]] }
       });
 
       return res.status(200).json({ message: "Chat updated in Google Sheet." });
     } 
 
-     const row = [
-      body.fkEventCode || "",      // A
-      body.EventName || "",        // B
-      body.Yr || "",               // C
-      body.NewEventCategory || "", // D
-      body.RecordingName || "",    // E
-      body.RecordingCode || "",    // F
-      body.Duration || "",         // G
-      body.Filesize || "",         // H
-      body.FilesizeInBytes || "",  // I
-      body.fkMediaName || "",      // J
-      body.BitRate || "",          // K
-      body.NoOfFiles || "",        // L
-      body.AudioBitrate || "",     // M
-      body.Masterquality || "",    // N
-      body.PreservationStatus || "", // O
-      body.RecordingRemarks || "", // P
-      body.MLUniqueID || "",       // Q
-      body.fkGranth || "",         // R
-      body.Number || "",           // S
-      body.Topic || "",            // T
-      body.ContentFrom || "",      // U
-      body.SatsangStart || "",     // V
-      body.SatsangEnd || "",       // W
-      body.fkCity || "",           // X
-      body.SubDuration || "",      // Y
-      body.Detail || "",           // Z
-      body.Remarks || "",          // AA
-      new Date().toISOString(),    // AB (Created Timestamp)
-      body.LastModifiedBy || (req.user && req.user.email) || "", // AC (Last Modified By)
-      body.Logchats || ""          // AD (Logchats)
-    ];
-    // ⚠️ CRITICAL CORRECTION:
-    // Counting your array elements above:
-    // A=0, B=1 ... Z=25, AA=26, AB=27, AC=28, AD=29, AE=30, AF=31.
-    // In your array code:
-    // timestamp is index 29 (AD)
-    // LastModifiedBy is index 30 (AE)
-    // Logchats is index 31 (AF)
+    // IF NEW: Pass empty array for existing data
+    const newRow = mapBodyToRow(body, headers, [], req.user && req.user.email);
     
-    // **Correction for Update Logic based on exact array count:**
-    // Since Logchats is the 32nd item (Index 31 = Column AF), 
-    // the Update logic in Step 3 should target **AF**, not AE.
-    
-    // Re-applying fix to Step 3 logic above...
-
     await googleSheets.spreadsheets.values.append({
       spreadsheetId,
       range: `${sheetName}`,
       valueInputOption: "USER_ENTERED",
-      resource: {
-        values: [row],
-      },
+      resource: { values: [newRow] },
     });
 
-    res.status(201).json({ message: "New Digital Recording added to Google Sheet successfully." });
+    res.status(201).json({ message: "Added to Google Sheet successfully." });
 
   } catch (err) {
-    console.error("❌ Google Sheets API Error:", err);
-    res.status(500).json({ error: "Failed to sync with Google Sheet.", details: err.message });
+    console.error("❌ POST Error:", err);
+    res.status(500).json({ error: "Failed to sync with Sheet.", details: err.message });
   }
 });
 
 
-// UPDATE ENTRY (PUT)
+// --- PUT: Update Entry in Google Sheet ---
 app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
   try {
-    // 1. Setup Auth (Same as POST)
-    const credentials = {
-      type: process.env.SERVICE_ACCOUNT_TYPE,
-      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
-      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
-      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
-      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
-      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
-      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
-      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
-      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
-    };
-
     const auth = new GoogleAuth({
-      credentials,
+      credentials: {
+        type: process.env.SERVICE_ACCOUNT_TYPE,
+        project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+        private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+        private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+        client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+      },
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
 
     const client = await auth.getClient();
-    const googleSheets = require("googleapis").google.sheets({ version: "v4", auth: client });
-    
-    // CONFIGURATION
+    const googleSheets = google.sheets({ version: "v4", auth: client });
     const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
     const sheetName = "Sheet1"; 
     
     const body = req.body || {};
-    const recordingCode = body.RecordingCode;
+    const recordingCode = (body.RecordingCode || "").trim();
+    const mlUniqueId = (body.MLUniqueID || "").trim();
 
-    if (!recordingCode) {
-      return res.status(400).json({ error: "RecordingCode is required to update an entry." });
-    }
+    if (!recordingCode) return res.status(400).json({ error: "RecordingCode required." });
 
-    // 2. FIND THE ROW (Search Column F)
-    // We search Column F because that is where RecordingCode sits in your array structure
     const checkRes = await googleSheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${sheetName}!F:F`, 
+      range: `${sheetName}`, 
     });
 
-    const rows = checkRes.data.values;
+    const rows = checkRes.data.values || [];
+    if (rows.length === 0) return res.status(500).json({ error: "Sheet is empty." });
+
+    const headers = rows[0];
+    const drCodeIndex = headers.findIndex(h => {
+        const cl = (h||"").trim().toLowerCase(); return cl === "recording code" || cl === "recordingcode";
+    });
+    const mlIdIndex = headers.findIndex(h => {
+        const cl = (h||"").trim().toLowerCase(); return cl === "ml unique id" || cl === "mluniqueid";
+    });
+
     let rowIndex = -1;
 
-    if (rows && rows.length > 0) {
-      // Find the row index where the Recording Code matches
-      rowIndex = rows.findIndex(r => r[0] === recordingCode);
+    if (rows.length > 1 && drCodeIndex !== -1) {
+      rowIndex = rows.findIndex((r, idx) => {
+          if (idx === 0) return false;
+          const matchDr = (r[drCodeIndex] || "").trim() === recordingCode;
+          const matchMl = mlIdIndex !== -1 ? (r[mlIdIndex] || "").trim() === mlUniqueId : true;
+          if (mlUniqueId !== "") return matchDr && matchMl;
+          return matchDr;
+      });
     }
 
     if (rowIndex === -1) {
-      return res.status(404).json({ error: "Entry not found in Google Sheet. Cannot update." });
+      return res.status(404).json({ error: "Entry not found in Sheet." });
     }
 
-    const rowNumber = rowIndex + 1; // Convert 0-based array index to 1-based Sheet row
+    const rowNumber = rowIndex + 1; 
+    const existingRowData = rows[rowIndex];
 
-    // 3. PREPARE THE UPDATED ROW DATA
-    // This maps exactly to the columns used in your POST request to ensure alignment.
-    // We update everything from Column A to AF to ensure all metadata edits are saved.
- const updatedRow = [
-      body.fkEventCode || "",      // A
-      body.EventName || "",        // B
-      body.Yr || "",               // C
-      body.NewEventCategory || "", // D
-      body.RecordingName || "",    // E
-      body.RecordingCode || "",    // F
-      body.Duration || "",         // G
-      body.Filesize || "",         // H
-      body.FilesizeInBytes || "",  // I
-      body.fkMediaName || "",      // J
-      // BitRate column removed here
-      body.NoOfFiles || "",        // K  (was L)
-      body.AudioBitrate || "",     // L
-      body.Masterquality || "",    // M
-      body.PreservationStatus || "", // N
-      body.RecordingRemarks || "", // O
-      body.MLUniqueID || "",       // P
-      body.fkGranth || "",         // Q
-      body.Number || "",           // R
-      body.Topic || "",            // S
-      body.ContentFrom || "",      // T
-      body.SatsangStart || "",     // U
-      body.SatsangEnd || "",       // V
-      body.fkCity || "",           // W
-      body.SubDuration || "",      // X
-      body.Detail || "",           // Y
-      body.Remarks || "",          // Z
-      new Date().toISOString(),    // AA
-      body.LastModifiedBy || (req.user && req.user.email) || "System", // AB
-      body.Logchats || ""          // AC
-];
+    // PASS existing data to mapBodyToRow so it preserves what isn't changing
+    const updatedRow = mapBodyToRow(body, headers, existingRowData, req.user && req.user.email);
 
-await googleSheets.spreadsheets.values.update({
+    const getColumnLetter = (colIndex) => {
+        let letter = '';
+        while (colIndex >= 0) {
+            letter = String.fromCharCode((colIndex % 26) + 65) + letter;
+            colIndex = Math.floor(colIndex / 26) - 1;
+        }
+        return letter;
+    };
+    const lastLetter = getColumnLetter(headers.length - 1);
+
+    await googleSheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A${rowNumber}:AC${rowNumber}`, // now ends at AC
+      range: `${sheetName}!A${rowNumber}:${lastLetter}${rowNumber}`, 
       valueInputOption: "USER_ENTERED",
       resource: { values: [updatedRow] }
-});
+    });
 
-    res.status(200).json({ message: "Entry updated successfully in Google Sheet." });
+    res.status(200).json({ message: "Entry updated successfully." });
 
   } catch (err) {
-    console.error("❌ Google Sheets PUT Error:", err);
-    res.status(500).json({ error: "Failed to update Google Sheet.", details: err.message });
+    console.error("❌ PUT Error:", err);
+    res.status(500).json({ error: "Failed to update.", details: err.message });
   }
 });
 // --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
@@ -10747,6 +10936,8 @@ app.get('/api/video-archival/related-reels', authenticateToken, async (req, res)
 });
 // ...existing code...
 
+// 2. UPDATE: GET UNUSED SATSANGS (Include MLUniqueID and Locks)
+// 2. UPDATE: GET UNUSED SATSANGS (Include MLUniqueID and Locks)
 // 2. UPDATE: GET UNUSED SATSANGS (Include MLUniqueID and Locks)
 app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, res) => {
   try {
