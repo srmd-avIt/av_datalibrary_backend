@@ -2193,9 +2193,6 @@ const SegmentCategory = req.body['Segment Category'];
 });
 
 // --- NEW ENDPOINT: Push to External Departments Google Sheet ---
-// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
-// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
-// --- NEW ENDPOINT: Push to External Departments Google Sheet ---
 app.post('/api/external-departments/push', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'Admin' && req.user.role !== 'Owner') {
@@ -2208,17 +2205,14 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
     let pushTasks = [];
 
     // --- ROBUST FILTER HELPERS ---
-    // Standard substring match
     const contains = (val, search) => (val || "").toString().toLowerCase().includes(search.toLowerCase());
     
-    // Safely checks if a comma-separated string contains a specific SUBSTRING tag
     const containsTag = (val, search) => {
         if (!val) return false;
         const tags = val.toString().split(',').map(s => s.trim().toLowerCase());
         return tags.some(t => t.includes(search.toLowerCase()));
     };
 
-    // Safely checks if a comma-separated string contains an EXACT tag 
     const hasTag = (val, exact) => {
         if (!val) return false;
         const tags = val.toString().split(',').map(s => s.trim().toLowerCase());
@@ -2226,33 +2220,23 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
     };
 
     // --- ROUTING LOGIC ---
-    if (viewId === "medialog_satsang_category") {
-      // 1. Base Push: All data from this view goes to its main tab
-     
-      
-      // 2. Filter: PS (Contains Pravachan, City contains Mumbai)
+   if (viewId === "medialog_satsang_category") {
       const psRows = rows.filter(r => containsTag(r["Segment Category"], 'Pravachan') && contains(r["fkCity"], 'Mumbai'));
       if (psRows.length > 0) pushTasks.push({ sheetName: "PS", filteredRows: psRows });
 
-      // 3. Filter: SU (EXACT 'SU' or EXACT 'SU - Revision' so we don't accidentally catch SU - GM)
       const suRows = rows.filter(r => hasTag(r["Segment Category"], 'SU') || hasTag(r["Segment Category"], 'SU - Revision'));
       if (suRows.length > 0) pushTasks.push({ sheetName: "SU", filteredRows: suRows });
 
-      // 4. Filter: Dyatra Satsangs (Contains Pravachan or Exact SU, NOT Mumbai)
       const dyatraRows = rows.filter(r => (containsTag(r["Segment Category"], 'Pravachan') || hasTag(r["Segment Category"], 'SU')) && !contains(r["fkCity"], 'Mumbai'));
       if (dyatraRows.length > 0) pushTasks.push({ sheetName: "Dyatra Satsangs", filteredRows: dyatraRows });
 
-      // 5. Filter: GM (PPG Approved) (Contains SU - GM, Masterquality High)
       const gmRows = rows.filter(r => containsTag(r["Segment Category"], 'SU - GM') && contains(r["Masterquality"], 'High'));
       if (gmRows.length > 0) pushTasks.push({ sheetName: "GM (PPG Approved)", filteredRows: gmRows });
 
-      // 6. Filter: Prasangik Udbodhan (Contains Prasangik, High Res OR Low Res)
       const prasangikRows = rows.filter(r => containsTag(r["Segment Category"], 'Prasangik') && (contains(r["Masterquality"], 'Video - High Res') || contains(r["Masterquality"], 'Only Low Res')));
       if (prasangikRows.length > 0) pushTasks.push({ sheetName: "Prasangik Udbodhan", filteredRows: prasangikRows });
 
     } else if (viewId === "medialog_all") {
-      
-      // Filter: Nemiji Sessions (Remains here if you want it from medialog_all)
       const nemijiRows = rows.filter(r => 
         (hasTag(r["Segment Category"], 'Nemiji:Satsang') || hasTag(r["Segment Category"], 'SRMD - Shibirs/Session/Training/Workshops')) &&
         contains(r["SpeakerSinger"], 'Nemi') &&
@@ -2260,6 +2244,23 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
       );
       if (nemijiRows.length > 0) pushTasks.push({ sheetName: "Nemiji Sessions", filteredRows: nemijiRows });
 
+    // --- ADD THIS BLOCK FOR INDIVIDUAL DATA SHARING TABS ---
+    } else if (viewId.startsWith("data_sharing_")) {
+      const tabMap = {
+        "data_sharing_ps": "PS",
+        "data_sharing_su": "SU",
+        "data_sharing_dyatra": "Dyatra Satsangs",
+        "data_sharing_gm": "GM (PPG Approved)",
+        "data_sharing_prasangik": "Prasangik Udbodhan",
+        "data_sharing_nemiji": "Nemiji Sessions"
+      };
+      const sheetName = tabMap[viewId];
+      if (sheetName) {
+        // Use all passed rows (as they are already properly filtered by the DB query)
+        pushTasks.push({ sheetName, filteredRows: rows });
+      }
+    // --------------------------------------------------------
+    
     } else {
       return res.status(400).json({ error: "Invalid viewId for external push." });
     }
@@ -2283,36 +2284,45 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: "v4", auth: client });
 
+    const metaRes = await googleSheets.spreadsheets.get({ spreadsheetId });
+    const sheetsMeta = metaRes.data.sheets;
+
     let totalAdded = 0;
-    let pushedEntriesSet = new Set();
+    // ✅ CHANGED: Use Array to hold objects with details instead of a Set of just IDs
+    let pushedEntriesList = [];
+
+    const targetHeaders = [
+      "Year", "Content From Date", "Detail + Subdetail", "Sub Duration", "Topic",
+      "PatrankNumber", "Granth", "Occasion", "City", "State", "Country",
+      "Event Name", "Remarks", "Guidance", "System_ID"
+    ];
 
     for (const task of pushTasks) {
       const { sheetName, filteredRows } = task;
 
-      const getRes = await googleSheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: sheetName,
-      }).catch(err => {
-        throw new Error(`Could not find tab: "${sheetName}". Please ensure this tab exists.`);
-      });
+      const currentSheetMeta = sheetsMeta.find(s => s.properties.title === sheetName);
+      if (!currentSheetMeta) throw new Error(`Could not find tab: "${sheetName}". Please ensure this tab exists.`);
+      const sheetId = currentSheetMeta.properties.sheetId;
 
+      const getRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
       const existingValues = getRes.data.values || [];
       let existingIds = new Set();
       let sheetHeaders = [];
       let appendData = [];
-
-      const idLabel = "System_ID";
-      const finalHeaders = [...labels, idLabel];
+      let systemIdIndex = -1;
 
       if (existingValues.length === 0) {
-        sheetHeaders = finalHeaders;
+        sheetHeaders = targetHeaders;
+        systemIdIndex = targetHeaders.indexOf("System_ID");
         appendData.push(sheetHeaders);
       } else {
         sheetHeaders = existingValues[0];
-        const idIndex = sheetHeaders.indexOf(idLabel);
-        if (idIndex !== -1) {
+        systemIdIndex = sheetHeaders.indexOf("System_ID");
+        if (systemIdIndex !== -1) {
           for (let i = 1; i < existingValues.length; i++) {
-            if (existingValues[i][idIndex]) existingIds.add(existingValues[i][idIndex].toString().trim());
+            if (existingValues[i][systemIdIndex]) {
+              existingIds.add(existingValues[i][systemIdIndex].toString().trim());
+            }
           }
         }
       }
@@ -2321,31 +2331,68 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
         const rowIdVal = rowObj[idKey] ? rowObj[idKey].toString().trim() : null;
         if (rowIdVal && existingIds.has(rowIdVal)) continue;
 
-        const rowArray = sheetHeaders.map(h => {
-           if (h === idLabel) return rowIdVal || "";
-           const labelIndex = labels.indexOf(h);
-           if (labelIndex !== -1) {
-             const k = keys[labelIndex];
-             const val = rowObj[k];
-             return val !== null && val !== undefined ? String(val) : "";
-           }
-           return "";
-        });
-        
+        let yearVal = rowObj["Yr"] || "";
+        if (!yearVal && rowObj["ContentFrom"]) {
+           const match = rowObj["ContentFrom"].match(/\b(20\d{2})\b/);
+           if (match) yearVal = match[1];
+        }
+
+        let detailSub = rowObj["DetailSub"] || "";
+        if (!detailSub) {
+           const d = rowObj["Detail"] || "";
+           const s = rowObj["SubDetail"] || "";
+           detailSub = `${d}${d && s ? " - " : ""}${s}`;
+        }
+
+        const mappedRowObj = {
+          "Year": yearVal,
+          "Content From Date": rowObj["ContentFrom"] || "",
+          "Detail + Subdetail": detailSub,
+          "Sub Duration": rowObj["SubDuration"] || "",
+          "Topic": rowObj["Topic"] || "",
+          "PatrankNumber": rowObj["Number"] || "",
+          "Granth": rowObj["fkGranth"] || "",
+          "Occasion": rowObj["fkOccasion"] || "",
+          "City": rowObj["fkCity"] || "",
+          "State": rowObj["fkState"] || "",
+          "Country": rowObj["fkCountry"] || "",
+          "Event Name": rowObj["EventDisplay"] || rowObj["EventName - EventCode"] || "",
+          "Remarks": rowObj["Remarks"] || "",
+          "Guidance": rowObj["Guidance"] || "",
+          "System_ID": rowIdVal || ""
+        };
+
+        const rowArray = sheetHeaders.map(h => mappedRowObj[h] !== undefined ? mappedRowObj[h] : "");
         appendData.push(rowArray);
+        
         if (rowIdVal) {
           existingIds.add(rowIdVal);
-          pushedEntriesSet.add(rowIdVal); 
+          // ✅ CHANGED: Push rich object to array
+          pushedEntriesList.push({
+            id: rowIdVal,
+            tab: sheetName,
+            eventName: mappedRowObj["Event Name"] || "No Event Details"
+          });
         }
         totalAdded++;
       }
 
       if (appendData.length > 0) {
         await googleSheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: sheetName,
-          valueInputOption: "USER_ENTERED",
-          resource: { values: appendData }
+          spreadsheetId, range: sheetName, valueInputOption: "USER_ENTERED", resource: { values: appendData }
+        });
+      }
+
+      if (systemIdIndex !== -1) {
+        await googleSheets.spreadsheets.batchUpdate({
+          spreadsheetId, resource: {
+            requests: [{
+                updateDimensionProperties: {
+                  range: { sheetId: sheetId, dimension: "COLUMNS", startIndex: systemIdIndex, endIndex: systemIdIndex + 1 },
+                  properties: { hiddenByUser: true }, fields: "hiddenByUser"
+                }
+            }]
+          }
         });
       }
     }
@@ -2353,7 +2400,7 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
     res.status(200).json({ 
       message: "Successfully pushed data.", 
       added: totalAdded,
-      pushedEntries: Array.from(pushedEntriesSet) 
+      pushedEntries: pushedEntriesList // ✅ CHANGED: Return the rich objects array
     });
 
   } catch (err) {
@@ -2361,13 +2408,129 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
     res.status(500).json({ error: "Failed to push to external sheet.", details: err.message });
   }
 });
- 
+
+app.get('/api/data-sharing/:tabId', authenticateToken, async (req, res) => {
+  try {
+    const { tabId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const isNemiji = tabId === 'nemiji';
+
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration','TopicgivenBy',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode','ProductionBucket'
+    ];
+
+    const aliases = {
+      IsInformal: 'nml', IsAudioRecorded: 'nml', PreservationStatus: 'dr', RecordingCode: 'dr',
+      RecordingName: 'dr', fkEventCode: 'dr', Masterquality: 'dr', DistributionDriveLink: 'dr',
+      ProductionBucket: 'dr', EventName: 'e', EventCode: 'e', Yr: 'e', NewEventCategory: 'e',
+      LastModifiedTimestamp: 'nml', LastModifiedBy: 'nml'
+    };
+
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, filterableColumns, filterableColumns, aliases);
+
+      let staticWhere = "";
+    if (tabId === 'ps') {
+        staticWhere = `nml.\`Segment Category\` LIKE '%Pravachan%' AND nml.fkCity LIKE '%Mumbai%'`;
+    } else if (tabId === 'su') {
+        // EXACT match for SU or SU - Revision (Prevents SU - GM or SU - Capsule from showing up)
+        staticWhere = `nml.\`Segment Category\` IN ('SU', 'SU - Revision')`;
+    } else if (tabId === 'dyatra') {
+        // EXACT match for SU here as well, so GM doesn't leak into Dyatra
+        staticWhere = `(nml.\`Segment Category\` LIKE '%Pravachan%' OR nml.\`Segment Category\` = 'SU') AND nml.fkCity NOT LIKE '%Mumbai%'`;
+    } else if (tabId === 'gm') {
+        staticWhere = `nml.\`Segment Category\` LIKE '%SU - GM%' AND dr.Masterquality LIKE '%High%'`;
+    } else if (tabId === 'prasangik') {
+        staticWhere = `nml.\`Segment Category\` LIKE '%Prasangik%' AND (dr.Masterquality LIKE '%Video - High Res%' OR dr.Masterquality LIKE '%Only Low Res%')`;
+    } else if (tabId === 'nemiji') {
+        staticWhere = `(nml.\`Segment Category\` LIKE '%Nemiji:Satsang%' OR nml.\`Segment Category\` LIKE '%SRMD - Shibirs%') AND nml.SpeakerSinger LIKE '%Nemi%' AND (dr.Masterquality LIKE '%Video - High Res%' OR dr.Masterquality LIKE '%Only Low Res%')`;
+    }
+
+    if (!isNemiji) {
+        staticWhere += ` AND (dr.PreservationStatus IS NULL OR TRIM(dr.PreservationStatus) = '' OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE')`;
+    }
+
+    let finalWhere = '';
+    if (dynamicWhere) {
+      finalWhere = `${dynamicWhere} AND (${staticWhere})`;
+    } else {
+      finalWhere = `WHERE ${staticWhere}`;
+    }
+
+    const dateColumns = ['ContentFrom', 'ContentTo', 'SatsangStart', 'SatsangEnd', 'LastModifiedTimestamp'];
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${!isNemiji ? 'LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID' : ''}
+      ${finalWhere}
+    `;
+    const [[{ total }]] = await db.query(countQuery, dynamicParams);
+    const totalPages = Math.ceil(total / limit);
+
+    const dataQuery = `
+      SELECT
+        nml.*,
+        dr.Masterquality AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink,
+        dr.ProductionBucket AS ProductionBucket,
+        dr.RecordingName AS RecordingName,
+        e.EventName,
+        e.EventCode,
+        e.Yr AS Yr,
+        ${!isNemiji ? 'e.NewEventCategory AS NewEventCategory, ec.EventCategory AS EventCategoryName,' : ''}
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub,
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = '' THEN NULL
+          ELSE CONCAT_WS(' - ', NULLIF(nml.ContentFrom, ''), NULLIF(nml.Detail, ''), NULLIF(nml.fkCity, ''))
+        END) AS ContentFromDetailCity
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${!isNemiji ? 'LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID' : ''}
+      ${finalWhere}
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await db.query(dataQuery, [...dynamicParams, limit, offset]);
+
+    res.json({
+      data: rows,
+      pagination: { page, limit, totalItems: total, totalPages }
+    });
+  } catch (err) {
+    console.error("❌ API Error for /api/data-sharing/:tabId:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
-// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
-
-// ...existing code...
-// --- Corrected Endpoint for "Satsang Category" (Using your query) ---
 // --- Corrected Endpoint for "Satsang Category" ---
 app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res) => {
   try {
@@ -2631,8 +2794,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
     res.status(500).json({ error: err.message });
   }
 });
-// ...existing code...
-// ...existing code...
+
 
 // --- EXPORT for Satsang Category ---
 app.get('/api/newmedialog/satsang-category/export', async (req, res) => {
@@ -4651,72 +4813,7 @@ app.get('/api/digitalrecordings/:recordingCode', async (req, res) => {
   }
 });
 
-// Place this BEFORE any app.get('/api/newmedialog/:id') routes
-app.get('/api/newmedialog/pratishtha', async (req, res) => {
-  try {
-    // Calculate the date 90 days ago
-    const ninetyDaysAgo = new Date();
-    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
 
-    const query = `
-      SELECT MLUniqueID, \`Segment Category\`
-      FROM NewMediaLog
-      WHERE \`Segment Category\` = 'Pratishtha'
-        AND ContentTo >= ?
-      ORDER BY ContentTo DESC
-    `;
-
-    const countQuery = `
-      SELECT COUNT(*) AS count
-      FROM NewMediaLog
-      WHERE \`Segment Category\` = 'Pratishtha'
-        AND ContentTo >= ?
-    `;
-
-    const [results] = await db.query(query, [formattedDate]);
-    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
-
-    res.status(200).json({ count, data: results });
-  } catch (err) {
-    console.error("❌ Database query error on /api/newmedialog/pratishtha:", err);
-    res.status(500).json({ error: 'Failed to fetch Pratishtha data.' });
-  }
-});
-
-
-
-app.get('/api/newmedialog/padhramani', async (req, res) => {
-  try {
-    // Calculate the date 90 days ago
-    const ninetyDaysAgo = new Date();
-    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-    const formattedDate = ninetyDaysAgo.toISOString().slice(0, 19).replace("T", " "); // MySQL DATETIME
-
-    const query = `
-      SELECT MLUniqueID, \`Segment Category\`
-      FROM NewMediaLog
-      WHERE \`Segment Category\` = 'Padhramani'
-        AND ContentTo >= ?
-      ORDER BY ContentTo DESC
-    `;
-
-    const countQuery = `
-      SELECT COUNT(*) AS count
-      FROM NewMediaLog
-      WHERE \`Segment Category\` = 'Padhramani'
-        AND ContentTo >= ?
-    `;
-
-    const [results] = await db.query(query, [formattedDate]);
-    const [[{ count }]] = await db.query(countQuery, [formattedDate]);
-
-    res.status(200).json({ count, data: results });
-  } catch (err) {
-    console.error("❌ Database query error on /api/newmedialog/padhramani:", err);
-    res.status(500).json({ error: 'Failed to fetch Padhramani data.' });
-  }
-});
 
 // --- NEW ENDPOINT: Fetch distinct cities from the last 90 days ---
 app.get('/api/newmedialog/city', async (req, res) => {
@@ -4804,566 +4901,6 @@ app.get('/api/newmedialog/:mlid', async (req, res) => {
   }
 });
 
-
-app.get('/api/dashboard/countries-visited', async (req, res) => {
-    const { year } = req.query;
-
-    if (!year) {
-        return res.status(400).json({ error: 'Year query parameter is required.' });
-    }
-
-    try {
-        const query = `
-            SELECT
-    nml.fkCountry AS name,
-    COUNT(*) AS visits
-FROM Events AS e
-INNER JOIN DigitalRecordings AS dr 
-    ON e.EventCode = dr.fkEventCode
-INNER JOIN NewMediaLog AS nml 
-    ON dr.RecordingCode = nml.fkDigitalRecordingCode
-WHERE
-    e.Yr = ?
-    AND nml.fkCountry IS NOT NULL
-    AND nml.fkCountry <> ''
-GROUP BY
-    nml.fkCountry
-ORDER BY
-    visits DESC -- Limit to a reasonable number for a chart
-        `;
-
-        const [results] = await db.query(query, [year]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/countries-visited:", err);
-        res.status(500).json({ error: 'Failed to fetch dashboard data' });
-    }
-});
-
-
-// --- NEW ENDPOINT FOR EVENT DETAILS BY COUNTRY AND YEAR ---
-app.get('/api/dashboard/events-by-country', async (req, res) => {
-    const { year, country } = req.query;
-
-    if (!year || !country) {
-        return res.status(400).json({ error: 'Year and Country query parameters are required.' });
-    }
-
-    try {
-        const query = `
-             SELECT
-                e.EventCode,
-                e.EventName,
-                nml.Detail,
-                dr.RecordingCode,
-                nml.fkCountry,
-                nml.fkCity,              -- ✅ Added city info
-                nml.*,
-                COUNT(*) OVER (PARTITION BY nml.fkCountry) AS visits_for_country
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr 
-                ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml 
-                ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE
-                e.Yr = ?
-                AND nml.fkCountry IS NOT NULL
-                AND nml.fkCountry <> ''
-                AND nml.fkCountry = ?
-            ORDER BY
-                visits_for_country DESC, 
-                nml.fkCity; -- ✅ Optional: order by city inside the country
-        `;
-
-        const [results] = await db.query(query, [year, country]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/events-by-country:", err);
-        res.status(500).json({ error: 'Failed to fetch event details' });
-    }
-});
-
-// --- NEW ENDPOINT FOR CITIES VISITED ---
-app.get('/api/dashboard/cities-visited', async (req, res) => {
-    const { year } = req.query;
-
-    if (!year) {
-        return res.status(400).json({ error: 'Year query parameter is required.' });
-    }
-
-    try {
-        const query = `
-            SELECT
-                nml.fkCity AS name,
-                COUNT(*) AS visits
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr 
-                ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml 
-                ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE
-                e.Yr = ?
-                AND nml.fkCity IS NOT NULL
-                AND nml.fkCity <> ''
-            GROUP BY 
-                nml.fkCity
-            ORDER BY 
-                visits DESC
-             -- Get the top 10 cities
-        `;
-
-        const [results] = await db.query(query, [year]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/cities-visited:", err);
-        res.status(500).json({ error: 'Failed to fetch city data' });
-    }
-});
-
-// --- ADD THIS NEW ENDPOINT for fetching details by city ---
-app.get('/api/dashboard/events-by-city', async (req, res) => {
-    const { year, city } = req.query;
-
-    if (!year || !city) {
-        return res.status(400).json({ error: 'Year and City query parameters are required.' });
-    }
-
-    try {
-        const query = `
-              SELECT
-                e.EventCode,
-                e.EventName,
-                e.FromDate,
-                e.ToDate,
-                nml.MLUniqueID,
-                nml.Detail AS Detail, -- Aliased for consistency
-                nml.fkCity,
-                nml.fkCountry
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE e.Yr = ? AND nml.fkCity = ?
-            ORDER BY e.FromDate, nml.LogSerialNo;
-        `;
-
-        const [results] = await db.query(query, [year, city]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/events-by-city:", err);
-        res.status(500).json({ error: 'Failed to fetch event details for city' });
-    }
-});
-
-
-// In a real application, this might come from a dedicated 'countries' table in your DB.
-// ✅ Define this BEFORE any routes
-const countryCoordinates = {
-  'Afghanistan': { lat: 33.9391, lng: 67.7100 },
-  'Albania': { lat: 41.1533, lng: 20.1683 },
-  'Algeria': { lat: 28.0339, lng: 1.6596 },
-  'Andorra': { lat: 42.5063, lng: 1.5218 },
-  'Angola': { lat: -11.2027, lng: 17.8739 },
-  'Antigua and Barbuda': { lat: 17.0608, lng: -61.7964 },
-  'Argentina': { lat: -38.4161, lng: -63.6167 },
-  'Armenia': { lat: 40.0691, lng: 45.0382 },
-  'Australia': { lat: -25.2744, lng: 133.7751 },
-  'Austria': { lat: 47.5162, lng: 14.5501 },
-  'Azerbaijan': { lat: 40.1431, lng: 47.5769 },
-  'Bahamas': { lat: 25.0343, lng: -77.3963 },
-  'Bahrain': { lat: 26.0667, lng: 50.5577 },
-  'Bangladesh': { lat: 23.6850, lng: 90.3563 },
-  'Barbados': { lat: 13.1939, lng: -59.5432 },
-  'Belarus': { lat: 53.7098, lng: 27.9534 },
-  'Belgium': { lat: 50.8503, lng: 4.3517 },
-  'Belize': { lat: 17.1899, lng: -88.4976 },
-  'Benin': { lat: 9.3077, lng: 2.3158 },
-  'Bhutan': { lat: 27.5142, lng: 90.4336 },
-  'Bolivia': { lat: -16.2902, lng: -63.5887 },
-  'Bosnia and Herzegovina': { lat: 43.9159, lng: 17.6791 },
-  'Botswana': { lat: -22.3285, lng: 24.6849 },
-  'Brazil': { lat: -14.2350, lng: -51.9253 },
-  'Brunei': { lat: 4.5353, lng: 114.7277 },
-  'Bulgaria': { lat: 42.7339, lng: 25.4858 },
-  'Burkina Faso': { lat: 12.2383, lng: -1.5616 },
-  'Burundi': { lat: -3.3731, lng: 29.9189 },
-  'Cambodia': { lat: 12.5657, lng: 104.9910 },
-  'Cameroon': { lat: 7.3697, lng: 12.3547 },
-  'Canada': { lat: 56.1304, lng: -106.3468 },
-  'Chile': { lat: -35.6751, lng: -71.5430 },
-  'China': { lat: 35.8617, lng: 104.1954 },
-  'Colombia': { lat: 4.5709, lng: -74.2973 },
-  'Costa Rica': { lat: 9.7489, lng: -83.7534 },
-  'Croatia': { lat: 45.1000, lng: 15.2000 },
-  'Cuba': { lat: 21.5218, lng: -77.7812 },
-  'Cyprus': { lat: 35.1264, lng: 33.4299 },
-  'Czech Republic': { lat: 49.8175, lng: 15.4730 },
-  'Denmark': { lat: 56.2639, lng: 9.5018 },
-  'Dominican Republic': { lat: 18.7357, lng: -70.1627 },
-  'Ecuador': { lat: -1.8312, lng: -78.1834 },
-  'Egypt': { lat: 26.8206, lng: 30.8025 },
-  'El Salvador': { lat: 13.7942, lng: -88.8965 },
-  'Estonia': { lat: 58.5953, lng: 25.0136 },
-  'Ethiopia': { lat: 9.1450, lng: 40.4897 },
-  'Finland': { lat: 61.9241, lng: 25.7482 },
-  'France': { lat: 46.6034, lng: 1.8883 },
-  'Germany': { lat: 51.1657, lng: 10.4515 },
-  'Greece': { lat: 39.0742, lng: 21.8243 },
-  'Hungary': { lat: 47.1625, lng: 19.5033 },
-  'Iceland': { lat: 64.9631, lng: -19.0208 },
-  'India': { lat: 20.5937, lng: 78.9629 },
-  'Indonesia': { lat: -0.7893, lng: 113.9213 },
-  'Iran': { lat: 32.4279, lng: 53.6880 },
-  'Iraq': { lat: 33.2232, lng: 43.6793 },
-  'Ireland': { lat: 53.3331, lng: -8.0 },
-  'Israel': { lat: 31.0461, lng: 34.8516 },
-  'Italy': { lat: 41.8719, lng: 12.5674 },
-  'Japan': { lat: 36.2048, lng: 138.2529 },
-  'Kenya': { lat: -0.0236, lng: 37.9062 },
-  'Kuwait': { lat: 29.3117, lng: 47.4818 },
-  'Latvia': { lat: 56.8796, lng: 24.6032 },
-  'Lebanon': { lat: 33.8547, lng: 35.8623 },
-  'Lithuania': { lat: 55.1694, lng: 23.8813 },
-  'Luxembourg': { lat: 49.8153, lng: 6.1296 },
-  'Malaysia': { lat: 4.2105, lng: 101.9758 },
-  'Mexico': { lat: 23.6345, lng: -102.5528 },
-  'Morocco': { lat: 31.7917, lng: -7.0926 },
-  'Nepal': { lat: 28.3949, lng: 84.1240 },
-  'Netherlands': { lat: 52.1326, lng: 5.2913 },
-  'New Zealand': { lat: -40.9006, lng: 174.8860 },
-  'Nigeria': { lat: 9.0820, lng: 8.6753 },
-  'Norway': { lat: 60.4720, lng: 8.4689 },
-  'Oman': { lat: 21.4735, lng: 55.9754 },
-  'Pakistan': { lat: 30.3753, lng: 69.3451 },
-  'Panama': { lat: 8.5380, lng: -80.7821 },
-  'Paraguay': { lat: -23.4425, lng: -58.4438 },
-  'Peru': { lat: -9.1900, lng: -75.0152 },
-  'Philippines': { lat: 12.8797, lng: 121.7740 },
-  'Poland': { lat: 51.9194, lng: 19.1451 },
-  'Portugal': { lat: 39.3999, lng: -8.2245 },
-  'Qatar': { lat: 25.276987, lng: 51.520008 },
-  'Romania': { lat: 45.9432, lng: 24.9668 },
-  'Russia': { lat: 61.5240, lng: 105.3188 },
-  'Saudi Arabia': { lat: 23.8859, lng: 45.0792 },
-  'Singapore': { lat: 1.3521, lng: 103.8198 },
-  'Slovakia': { lat: 48.6690, lng: 19.6990 },
-  'Slovenia': { lat: 46.1512, lng: 14.9955 },
-  'South Africa': { lat: -30.5595, lng: 22.9375 },
-  'South Korea': { lat: 35.9078, lng: 127.7669 },
-  'Spain': { lat: 40.4637, lng: -3.7492 },
-  'Sri Lanka': { lat: 7.8731, lng: 80.7718 },
-  'Sweden': { lat: 60.1282, lng: 18.6435 },
-  'Switzerland': { lat: 46.8182, lng: 8.2275 },
-  'Thailand': { lat: 15.8700, lng: 100.9925 },
-  'Turkey': { lat: 38.9637, lng: 35.2433 },
-  'UAE': { lat: 23.4241, lng: 53.8478 },
-  'UK': { lat: 55.3781, lng: -3.4360 },
-  'USA': { lat: 37.0902, lng: -95.7129 },
-  'Ukraine': { lat: 48.3794, lng: 31.1656 },
-  'Uruguay': { lat: -32.5228, lng: -55.7658 },
-  'Uzbekistan': { lat: 41.3775, lng: 64.5853 },
-  'Venezuela': { lat: 6.4238, lng: -66.5897 },
-  'Vietnam': { lat: 14.0583, lng: 108.2772 },
-  'Yemen': { lat: 15.5527, lng: 48.5164 },
-  'Zambia': { lat: -13.1339, lng: 27.8493 },
-  'Zimbabwe': { lat: -19.0154, lng: 29.1549 }
-};
-
-// Optional normalization mapping
-const countryNameMapping = {
-  'Afghanistan': 'Afghanistan',
-  'Albania': 'Albania',
-  'Algeria': 'Algeria',
-  'Andorra': 'Andorra',
-  'Angola': 'Angola',
-  'Argentina': 'Argentina',
-  'Armenia': 'Armenia',
-  'Australia': 'Australia',
-  'Austria': 'Austria',
-  'Azerbaijan': 'Azerbaijan',
-  'Bahamas': 'Bahamas',
-  'Bahrain': 'Bahrain',
-  'Bangladesh': 'Bangladesh',
-  'Barbados': 'Barbados',
-  'Belarus': 'Belarus',
-  'Belgium': 'Belgium',
-  'Belize': 'Belize',
-  'Benin': 'Benin',
-  'Bhutan': 'Bhutan',
-  'Bolivia': 'Bolivia',
-  'Bosnia and Herzegovina': 'Bosnia and Herzegovina',
-  'Botswana': 'Botswana',
-  'Brazil': 'Brazil',
-  'Brunei': 'Brunei',
-  'Bulgaria': 'Bulgaria',
-  'Burkina Faso': 'Burkina Faso',
-  'Burundi': 'Burundi',
-  'Cambodia': 'Cambodia',
-  'Cameroon': 'Cameroon',
-  'Canada': 'Canada',
-  'Chile': 'Chile',
-  'China': 'China',
-  'Colombia': 'Colombia',
-  'Costa Rica': 'Costa Rica',
-  'Croatia': 'Croatia',
-  'Cuba': 'Cuba',
-  'Cyprus': 'Cyprus',
-  'Czech Republic': 'Czech Republic',
-  'Denmark': 'Denmark',
-  'Dominican Republic': 'Dominican Republic',
-  'Ecuador': 'Ecuador',
-  'Egypt': 'Egypt',
-  'El Salvador': 'El Salvador',
-  'Estonia': 'Estonia',
-  'Ethiopia': 'Ethiopia',
-  'Finland': 'Finland',
-  'France': 'France',
-  'Germany': 'Germany',
-  'Greece': 'Greece',
-  'Hungary': 'Hungary',
-  'Iceland': 'Iceland',
-  'India': 'India',
-  'Indonesia': 'Indonesia',
-  'Iran': 'Iran',
-  'Iraq': 'Iraq',
-  'Ireland': 'Ireland',
-  'Israel': 'Israel',
-  'Italy': 'Italy',
-  'Jamaica': 'Jamaica',
-  'Japan': 'Japan',
-  'Jordan': 'Jordan',
-  'Kazakhstan': 'Kazakhstan',
-  'Kenya': 'Kenya',
-  'Kuwait': 'Kuwait',
-  'Kyrgyzstan': 'Kyrgyzstan',
-  'Laos': 'Laos',
-  'Latvia': 'Latvia',
-  'Lebanon': 'Lebanon',
-  'Lithuania': 'Lithuania',
-  'Luxembourg': 'Luxembourg',
-  'Madagascar': 'Madagascar',
-  'Malaysia': 'Malaysia',
-  'Mexico': 'Mexico',
-  'Mongolia': 'Mongolia',
-  'Morocco': 'Morocco',
-  'Myanmar': 'Myanmar',
-  'Nepal': 'Nepal',
-  'Netherlands': 'Netherlands',
-  'New Zealand': 'New Zealand',
-  'Nigeria': 'Nigeria',
-  'North Korea': 'North Korea',
-  'Norway': 'Norway',
-  'Oman': 'Oman',
-  'Pakistan': 'Pakistan',
-  'Panama': 'Panama',
-  'Paraguay': 'Paraguay',
-  'Peru': 'Peru',
-  'Philippines': 'Philippines',
-  'Poland': 'Poland',
-  'Portugal': 'Portugal',
-  'Qatar': 'Qatar',
-  'Romania': 'Romania',
-  'Russia': 'Russia',
-  'Saudi Arabia': 'Saudi Arabia',
-  'Serbia': 'Serbia',
-  'Singapore': 'Singapore',
-  'Slovakia': 'Slovakia',
-  'Slovenia': 'Slovenia',
-  'South Africa': 'South Africa',
-  'South Korea': 'South Korea',
-  'Spain': 'Spain',
-  'Sri Lanka': 'Sri Lanka',
-  'Sudan': 'Sudan',
-  'Sweden': 'Sweden',
-  'Switzerland': 'Switzerland',
-  'Syria': 'Syria',
-  'Taiwan': 'Taiwan',
-  'Tajikistan': 'Tajikistan',
-  'Tanzania': 'Tanzania',
-  'Thailand': 'Thailand',
-  'Tunisia': 'Tunisia',
-  'Turkey': 'Turkey',
-  'Turkmenistan': 'Turkmenistan',
-  'Uganda': 'Uganda',
-  'Ukraine': 'Ukraine',
-  'United Arab Emirates': 'UAE',
-  'UAE': 'UAE',
-  'United Kingdom': 'UK',
-  'UK': 'UK',
-  'United States': 'USA',
-  'USA': 'USA',
-  'Uruguay': 'Uruguay',
-  'Uzbekistan': 'Uzbekistan',
-  'Venezuela': 'Venezuela',
-  'Vietnam': 'Vietnam',
-  'Yemen': 'Yemen',
-  'Zambia': 'Zambia',
-  'Zimbabwe': 'Zimbabwe'
-};
-
-
-// --- NEW ENDPOINT FOR GLOBAL MAP DISTRIBUTION DATA ---
-app.get('/api/dashboard/global-distribution', async (req, res) => {
-    const { year } = req.query;
-
-    if (!year) {
-        return res.status(400).json({ error: 'Year query parameter is required.' });
-    }
-
-    try {
-        // This is your new, more detailed query integrated into the endpoint.
-        const query = `
-      SELECT
-    nml.fkCountry AS country,
-    e.Yr AS year,   -- ✅ include year in result if you want to show it
-    SUM(
-        CASE
-            WHEN nml.Detail LIKE '%Pratishtha%'
-              OR nml.Detail LIKE '%Sthapna%'
-              OR nml.SubDetail LIKE '%Pratishtha%'
-              OR nml.SubDetail LIKE '%Sthapna%'
-            THEN 1 ELSE 0 END
-    ) AS pratishthas,
-    SUM(
-        CASE
-            WHEN nml.Detail LIKE '%Padhramani%'
-              OR nml.Detail LIKE '%Pagla%'
-              OR nml.SubDetail LIKE '%Padhramani%'
-              OR nml.SubDetail LIKE '%Pagla%'
-            THEN 1 ELSE 0 END
-    ) AS padhramanis
-FROM Events AS e
-INNER JOIN DigitalRecordings AS dr
-    ON e.EventCode = dr.fkEventCode
-INNER JOIN NewMediaLog AS nml
-    ON dr.RecordingCode = nml.fkDigitalRecordingCode
-WHERE
-    e.Yr = ?                          -- ✅ filter by selected year
-    AND nml.FootageType <> 'Glimpses'
-    AND nml.EditingStatus NOT LIKE '%title%'
-    AND dr.PreservationStatus = 'Preserve'
-    AND nml.fkCountry IS NOT NULL
-    AND nml.fkCountry <> ''
-GROUP BY
-    nml.fkCountry, e.Yr
-ORDER BY
-    country ASC;
-
-        `;
-
-        const [results] = await db.query(query, [year]);
-
-        // Post-process to add coordinates and format for the frontend
-        // This part is crucial for compatibility with your React component
-        const dataWithCoords = results.map(row => {
-            const normalizedName = countryNameMapping[row.country] || row.country;
-            return {
-                name: normalizedName,
-                pratishthas: row.pratishthas,
-                padhramanis: row.padhramanis,
-                lat: countryCoordinates[normalizedName]?.lat || 0,
-                lng: countryCoordinates[normalizedName]?.lng || 0,
-            };
-        }).filter(country => country.lat !== 0 || country.lng !== 0);
-
-        res.json(dataWithCoords);
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/global-distribution:", err);
-        res.status(500).json({ error: 'Failed to fetch global distribution data' });
-    }
-});
-
-
-
-// in src/server/index.js
-
-// --- NEW ENDPOINT: Fetch only Pratishtha events for a country and year ---
-app.get('/api/dashboard/pratishtha-events', async (req, res) => {
-    const { year, country } = req.query;
-
-    if (!year || !country) {
-        return res.status(400).json({ error: 'Year and Country are required.' });
-    }
-
-    try {
-        // Using the query you provided
-        const query = `
-          SELECT
-    e.EventCode,
-    e.EventName,
-    e.FromDate,
-    e.ToDate,
-    nml.fkCity,
-    GROUP_CONCAT(DISTINCT nml.Detail ORDER BY nml.Detail SEPARATOR ', ') AS ContentDetails
-FROM Events AS e
-INNER JOIN DigitalRecordings AS dr
-    ON e.EventCode = dr.fkEventCode
-INNER JOIN NewMediaLog AS nml
-    ON dr.RecordingCode = nml.fkDigitalRecordingCode
-WHERE e.Yr = ?
-  AND nml.fkCountry = ?
-  AND (
-       nml.Detail LIKE '%Pratishtha%'
-    OR nml.Detail LIKE '%Sthapna%'
-    OR nml.SubDetail LIKE '%Pratishtha%'
-    OR nml.SubDetail LIKE '%Sthapna%'
-  )
-GROUP BY e.EventCode, e.EventName, e.FromDate, e.ToDate, nml.fkCity
-ORDER BY e.FromDate ASC;
-
-        `;
-        const [results] = await db.query(query, [year, country]);
-        res.json(results);
-    } catch (err) {
-        console.error("Database query error on /pratishtha-events:", err);
-        res.status(500).json({ error: 'Failed to fetch Pratishtha events' });
-    }
-});
-
-// --- NEW ENDPOINT: Fetch only Padhramani events for a country and year ---
-app.get('/api/dashboard/padhramani-events', async (req, res) => {
-    const { year, country } = req.query;
-
-    if (!year || !country) {
-        return res.status(400).json({ error: 'Year and Country are required.' });
-    }
-
-    try {
-        // Using the query you provided
-        const query = `
-           SELECT
-                e.EventCode,
-                e.EventName,
-                e.FromDate,
-                e.ToDate,
-                nml.fkCity,
-                GROUP_CONCAT(DISTINCT nml.Detail ORDER BY nml.Detail SEPARATOR ', ') AS ContentDetails
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr
-                ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml
-                ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE e.Yr = ?
-              AND nml.fkCountry = ?
-              AND (
-                   nml.Detail LIKE '%Padhramani%'
-                OR nml.Detail LIKE '%Pagla%'
-                OR nml.SubDetail LIKE '%Padhramani%'
-                OR nml.SubDetail LIKE '%Pagla%'
-              )
-            GROUP BY e.EventCode, e.EventName, e.FromDate, e.ToDate, nml.fkCity
-            ORDER BY e.FromDate ASC;
-        `;
-        const [results] = await db.query(query, [year, country]);
-        res.json(results);
-    } catch (err) {
-        console.error("Database query error on /padhramani-events:", err);
-        res.status(500).json({ error: 'Failed to fetch Padhramani events' });
-    }
-});
 
 // --- NEW ENDPOINT FOR 'EventCode' DROPDOWN (From DigitalRecordings) ---
 // backend: /api/event-code/options
@@ -5505,82 +5042,7 @@ app.get('/api/dashboard/events-by-group', async (req, res) => {
     }
 });
 
-app.get('/api/dashboard/pratishtha-events-by-group', async (req, res) => {
-    const { year, country } = req.query;
 
-    if (!year || !country) {
-        return res.status(400).json({ error: 'Year and Country are required.' });
-    }
-
-    try {
-        const query = `
-            SELECT
-                e.EventCode,
-                e.EventName,
-                e.FromDate,
-                e.ToDate,
-                nml.fkCity,
-                nml.fkCountry,
-                COUNT(nml.MLUniqueID) AS ContentCount
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE e.Yr = ? 
-              AND nml.fkCountry = ? 
-              AND e.EventName LIKE '%Pratishtha%'
-            GROUP BY 
-                e.EventCode, e.EventName, e.FromDate, e.ToDate, nml.fkCity, nml.fkCountry
-            ORDER BY 
-                e.FromDate ASC;
-        `;
-        
-        const [results] = await db.query(query, [year, country]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/pratishtha-events-by-group:", err);
-        res.status(500).json({ error: 'Failed to fetch grouped Pratishtha event data' });
-    }
-});
-
-// --- NEW ENDPOINT 2: Grouped Padhramani Events ---
-app.get('/api/dashboard/padhramani-events-by-group', async (req, res) => {
-    const { year, country } = req.query;
-
-    if (!year || !country) {
-        return res.status(400).json({ error: 'Year and Country are required.' });
-    }
-
-    try {
-        const query = `
-            SELECT
-                e.EventCode,
-                e.EventName,
-                e.FromDate,
-                e.ToDate,
-                nml.fkCity,
-                nml.fkCountry,
-                COUNT(nml.MLUniqueID) AS ContentCount
-            FROM Events AS e
-            INNER JOIN DigitalRecordings AS dr ON e.EventCode = dr.fkEventCode
-            INNER JOIN NewMediaLog AS nml ON dr.RecordingCode = nml.fkDigitalRecordingCode
-            WHERE e.Yr = ? 
-              AND nml.fkCountry = ? 
-              AND e.EventName LIKE '%Padhramani%'
-            GROUP BY 
-                e.EventCode, e.EventName, e.FromDate, e.ToDate, nml.fkCity, nml.fkCountry
-            ORDER BY 
-                e.FromDate ASC;
-        `;
-        
-        const [results] = await db.query(query, [year, country]);
-        res.json(results);
-
-    } catch (err) {
-        console.error("Database query error on /api/dashboard/padhramani-events-by-group:", err);
-        res.status(500).json({ error: 'Failed to fetch grouped Padhramani event data' });
-    }
-});
 
 // --- Send Invitation Endpoint ---
 app.post("/api/send-invitation", async (req, res) => {
@@ -10955,29 +10417,43 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
       MLUniqueID 
     } = req.query;
 
-    const usedIdsSubQuery = `
-      SELECT DISTINCT child_nml.EventRefMLID
-      FROM NewMediaLog child_nml
-      INNER JOIN DigitalRecordings child_dr
-        ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
-      WHERE child_dr.ProductionBucket LIKE '%Wisdom%'
-        AND child_nml.EventRefMLID IS NOT NULL
-        AND child_nml.EventRefMLID <> ''
+    // Using NOT EXISTS instead of NOT IN (Safer and ignores hidden NULL issues)
+    const notExistsSubQuery = `
+      NOT EXISTS (
+        SELECT 1
+        FROM NewMediaLog child_nml
+        INNER JOIN DigitalRecordings child_dr
+          ON child_nml.fkDigitalRecordingCode = child_dr.RecordingCode
+        WHERE child_dr.ProductionBucket LIKE '%Wisdom%'
+          AND child_nml.EventRefMLID = nml.MLUniqueID
+      )
     `;
 
+    // 2. BUILD WHERE CLAUSE
     let whereClause = `
-      nml.\`Segment Category\` IN (
+      TRIM(nml.\`Segment Category\`) IN (
         'Satsang','Pravachan','Informal Satsang',
         'Prasangik Udbodhan','Satsang Clips',
         'SU','SU-Capsule','SU-Extracted','SU-GM','SU-Revision'
       )
-      AND (dr.PreservationStatus = 'Preserve' OR dr.PreservationStatus IS NULL)
-      AND nml.MLUniqueID NOT IN (${usedIdsSubQuery})
+      AND (
+        dr.PreservationStatus LIKE '%Preserve%' 
+        OR dr.PreservationStatus IS NULL 
+        OR TRIM(dr.PreservationStatus) = ''
+      )
+      AND (
+        TRIM(dr.Masterquality) = 'Video - High Res'
+        
+        /* 🚨 THE 455 MISSING RECORDS ARE HIDING HERE 🚨 */
+        /* If you want to include logs that haven't had a Masterquality assigned yet, UNCOMMENT the line below: */
+        -- OR dr.Masterquality IS NULL OR TRIM(dr.Masterquality) = ''
+      )
+      AND ${notExistsSubQuery}
     `;
 
     const filterParams = [];
 
-    // 2. GLOBAL SEARCH (Existing)
+    // 3. GLOBAL SEARCH
     if (search) {
       const s = `%${search}%`;
       whereClause += ` AND (
@@ -10990,9 +10466,7 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
       filterParams.push(s, s, s, s, s);
     }
 
-    // 3. NEW SPECIFIC FILTERS
-    // Note: We use the aliases defined in THIS query (nml, dr, e)
-
+    // 4. SPECIFIC FILTERS
     if (Yr && Yr.trim() !== '') {
       whereClause += " AND e.Yr = ?";
       filterParams.push(Yr.trim());
@@ -11018,13 +10492,15 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
       filterParams.push(MLUniqueID.trim());
     }
 
-    // 4. COMBINE PARAMS
+    // 5. COMBINE PARAMS
     const dataParams = [...filterParams, limit, offset];
 
+    // IMPORTANT: Back to LEFT JOIN so we don't drop records missing DigitalRecordings entirely
     const query = `
       SELECT
         nml.MLUniqueID,
         nml.MLUniqueID AS EventRefMLID, 
+        nml.EventRefMLID AS ParentEventRefMLID,
         nml.ContentFrom,
         nml.CounterFrom,
         nml.CounterTo,
@@ -11038,6 +10514,7 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
         dr.Dimension,
         dr.ProductionBucket,
         dr.RecordingName,
+        dr.Masterquality,
         e.EventName,
         e.EventCode,
         e.Yr,
@@ -11080,6 +10557,8 @@ app.get('/api/video-archival/unused-satsangs', authenticateToken, async (req, re
     res.status(500).json({ error: "Database error" });
   }
 });
+
+// Add this right before your `app.post('/api/external-departments/push', ...)` declaration:
 
 
 // 3. NEW: Lock/Unlock Entry Endpoint
