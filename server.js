@@ -11397,11 +11397,11 @@ app.get('/api/search-details-global', authenticateToken, async (req, res) => {
 
 const PREF_SHEET_NAME = "UserColumnPreferences";
 // This is the same sheet ID you use for your Users table
-const USER_SHEET_ID = "1rJQlZ6oD94YEUaomjtsFmQP3rk6YGAZ9mfFu3H8l2Cg"; 
+const USER_SHEET_ID = "1GaCTwU_LUFF2B9NbBVzenwRjrW8sPvUJMkKzDUOdme0"; 
 
 // --- GET: Fetch layout preferences from Google Sheets ---
 app.get('/api/user-column-preferences', authenticateToken, async (req, res) => {
-  const { viewId, userId } = req.query;
+  const { viewId, userId } = req.query; // Using UserID for lookup
   
   if (!viewId || !userId) {
     return res.status(400).json({ error: "viewId and userId are required." });
@@ -11412,20 +11412,21 @@ app.get('/api/user-column-preferences', authenticateToken, async (req, res) => {
     
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: USER_SHEET_ID,
-      range: `${PREF_SHEET_NAME}!A2:F`, // Fetch everything skipping header
+      range: `${PREF_SHEET_NAME}!A2:G`, // Fetch A through G
     });
 
     const rows = result.data.values || [];
     
-    // Find the row for this specific view and user
+    // Match by ViewID (Col A) and UserID (Col B)
     const userRow = rows.find(row => row[0] === viewId && row[1] === userId);
 
     if (userRow) {
       let visible = [];
       let hidden = [];
       try {
-        visible = JSON.parse(userRow[2] || "[]");
-        hidden = JSON.parse(userRow[3] || "[]");
+        // Because UserName is in C (index 2), arrays are now in D (index 3) and E (index 4)
+        visible = JSON.parse(userRow[3] || "[]");
+        hidden = JSON.parse(userRow[4] || "[]");
       } catch(e) {
         console.error("Error parsing JSON from sheets", e);
       }
@@ -11433,7 +11434,7 @@ app.get('/api/user-column-preferences', authenticateToken, async (req, res) => {
       res.status(200).json({
         visible,
         hidden,
-        summary: userRow[4] || ""
+        summary: userRow[5] || "" // Summary is in F (index 5)
       });
     } else {
       res.status(404).json({ message: "No custom preferences found for this user." });
@@ -11446,9 +11447,10 @@ app.get('/api/user-column-preferences', authenticateToken, async (req, res) => {
 
 // --- POST: Save layout preferences to Google Sheets ---
 app.post('/api/user-column-preferences', authenticateToken, async (req, res) => {
-  const { viewId, userIds, visibleKeys, hiddenKeys, summaryText } = req.body;
+  // We now accept targetUsers as an array of objects: [{ id: "...", name: "..." }]
+  const { viewId, targetUsers, visibleKeys, hiddenKeys, summaryText } = req.body;
 
-  if (!viewId || !userIds || !Array.isArray(userIds) || !visibleKeys) {
+  if (!viewId || !targetUsers || !Array.isArray(targetUsers) || !visibleKeys) {
     return res.status(400).json({ error: "Invalid data payload." });
   }
 
@@ -11459,55 +11461,50 @@ app.post('/api/user-column-preferences', authenticateToken, async (req, res) => 
     const hiddenStr = JSON.stringify(hiddenKeys || []);
     const timestamp = new Date().toISOString();
 
-    // 1. Read existing rows to check who needs an UPDATE vs an APPEND
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: USER_SHEET_ID,
-      range: `${PREF_SHEET_NAME}!A:B`, // We only need columns A and B to check existence
+      range: `${PREF_SHEET_NAME}!A:B`, 
     });
 
     const existingRows = result.data.values || [];
-    
-    // Create a map to quickly find row numbers (1-based index for A1 notation)
     const rowMap = new Map();
     existingRows.forEach((row, index) => {
-      if (index === 0) return; // skip header
-      rowMap.set(`${row[0]}_${row[1]}`, index + 1); // e.g. "viewId_userId" -> rowNumber
+      if (index === 0) return; 
+      rowMap.set(`${row[0]}_${row[1]}`, index + 1); // map by viewId_userId
     });
 
     const appendData = [];
     const updatePromises = [];
 
-    // 2. Loop through selected users
-    for (const uid of userIds) {
-      const rowNum = rowMap.get(`${viewId}_${uid}`);
+    for (const tUser of targetUsers) {
+      const rowNum = rowMap.get(`${viewId}_${tUser.id}`);
+      // Array data matching Columns A, B, C, D, E, F, G
+      const rowData = [viewId, tUser.id, tUser.name, visibleStr, hiddenStr, summaryText, timestamp];
       
       if (rowNum) {
-        // ROW EXISTS: Update Columns C, D, E, F
+        // Overwrite the entire row to ensure the Name gets updated if it changed
         updatePromises.push(
           sheets.spreadsheets.values.update({
             spreadsheetId: USER_SHEET_ID,
-            range: `${PREF_SHEET_NAME}!C${rowNum}:F${rowNum}`,
+            range: `${PREF_SHEET_NAME}!A${rowNum}:G${rowNum}`,
             valueInputOption: "USER_ENTERED",
-            resource: { values: [[visibleStr, hiddenStr, summaryText, timestamp]] }
+            resource: { values: [rowData] }
           })
         );
       } else {
-        // NEW ROW: Append full data
-        appendData.push([viewId, uid, visibleStr, hiddenStr, summaryText, timestamp]);
+        appendData.push(rowData);
       }
     }
 
-    // 3. Execute Append for new users
     if (appendData.length > 0) {
       await sheets.spreadsheets.values.append({
         spreadsheetId: USER_SHEET_ID,
-        range: `${PREF_SHEET_NAME}!A:F`,
+        range: `${PREF_SHEET_NAME}!A:G`,
         valueInputOption: "USER_ENTERED",
         resource: { values: appendData },
       });
     }
 
-    // 4. Execute Updates for existing users
     if (updatePromises.length > 0) {
       await Promise.all(updatePromises);
     }
