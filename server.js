@@ -2219,8 +2219,16 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
         return tags.includes(exact.toLowerCase());
     };
 
+    // New helper to ignore all spaces when checking strings like "Video - High Res"
+    const matchesQuality = (val, search) => {
+        if (!val) return false;
+        const cleanVal = val.toString().toLowerCase().replace(/\s+/g, '');
+        const cleanSearch = search.toLowerCase().replace(/\s+/g, '');
+        return cleanVal.includes(cleanSearch);
+    };
+
     // --- ROUTING LOGIC ---
-   if (viewId === "medialog_satsang_category") {
+    if (viewId === "medialog_satsang_category") {
       const psRows = rows.filter(r => containsTag(r["Segment Category"], 'Pravachan') && contains(r["fkCity"], 'Mumbai'));
       if (psRows.length > 0) pushTasks.push({ sheetName: "PS", filteredRows: psRows });
 
@@ -2233,18 +2241,23 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
       const gmRows = rows.filter(r => containsTag(r["Segment Category"], 'SU - GM') && contains(r["Masterquality"], 'High'));
       if (gmRows.length > 0) pushTasks.push({ sheetName: "GM (PPG Approved)", filteredRows: gmRows });
 
-      const prasangikRows = rows.filter(r => containsTag(r["Segment Category"], 'Prasangik') && (contains(r["Masterquality"], 'Video - High Res') || contains(r["Masterquality"], 'Only Low Res')));
+      // FIX: Robust check for Prasangik Udbodhan
+      const prasangikRows = rows.filter(r => 
+        containsTag(r["Segment Category"], 'Prasangik') && 
+        (matchesQuality(r["Masterquality"], 'Video-HighRes') || matchesQuality(r["Masterquality"], 'OnlyLowRes'))
+      );
       if (prasangikRows.length > 0) pushTasks.push({ sheetName: "Prasangik Udbodhan", filteredRows: prasangikRows });
 
     } else if (viewId === "medialog_all") {
+      // FIX: Robust check for Nemiji
       const nemijiRows = rows.filter(r => 
         (hasTag(r["Segment Category"], 'Nemiji:Satsang') || hasTag(r["Segment Category"], 'SRMD - Shibirs/Session/Training/Workshops')) &&
         contains(r["SpeakerSinger"], 'Nemi') &&
-        (contains(r["Masterquality"], 'Video - High Res') || contains(r["Masterquality"], 'Only Low Res'))
+        (matchesQuality(r["Masterquality"], 'Video-HighRes') || matchesQuality(r["Masterquality"], 'OnlyLowRes'))
       );
       if (nemijiRows.length > 0) pushTasks.push({ sheetName: "Nemiji Sessions", filteredRows: nemijiRows });
 
-    // --- ADD THIS BLOCK FOR INDIVIDUAL DATA SHARING TABS ---
+    // --- BLOCK FOR INDIVIDUAL DATA SHARING TABS ---
     } else if (viewId.startsWith("data_sharing_")) {
       const tabMap = {
         "data_sharing_ps": "PS",
@@ -2256,11 +2269,8 @@ app.post('/api/external-departments/push', authenticateToken, async (req, res) =
       };
       const sheetName = tabMap[viewId];
       if (sheetName) {
-        // Use all passed rows (as they are already properly filtered by the DB query)
         pushTasks.push({ sheetName, filteredRows: rows });
       }
-    // --------------------------------------------------------
-    
     } else {
       return res.status(400).json({ error: "Invalid viewId for external push." });
     }
