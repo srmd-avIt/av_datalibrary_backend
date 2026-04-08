@@ -471,6 +471,10 @@ const mapBodyToRow = (body, headers, existingRow = [], userEmail = "System") => 
       else if (header === "remarks") 
           row[index] = body.Remarks || row[index];
           
+      // Add this new mapping for DistributionDriveLink
+      else if (header === "distribution drive link" || header === "distributiondrivelink") 
+          row[index] = body.DistributionDriveLink || row[index];
+          
       else if (header === "createdtimestamp" || header === "created timestamp") 
           row[index] = existingRow[index] || body.CreatedTimestamp || new Date().toISOString();
           
@@ -4500,13 +4504,13 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
     const insertQuery = `
       INSERT INTO DigitalRecordings (
         fkEventCode, RecordingName, RecordingCode, Duration,
-        Masterquality, fkMediaName, Filesize, FilesizeInBytes,
+        Masterquality, fkMediaName, Filesize, DistributionDriveLink, FilesizeInBytes,
         NoOfFiles, RecordingRemarks,
         AudioBitrate, AudioTotalDuration,
         PreservationStatus,
         LastModifiedTimestamp
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         'Preserve',
         NOW()
       )
@@ -4518,12 +4522,12 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
       data.RecordingCode,
       data.Duration,
       data.Masterquality,
-      fkMediaName,                  // ← upper‑cased value
+      fkMediaName,
       data.Filesize,
+      data.DistributionDriveLink,
       data.FilesizeInBytes,
       data.NoOfFiles,
       data.RecordingRemarks,
-      data.fkDigitalMasterCategory,
       data.AudioBitrate,
       data.AudioTotalDuration
     ];
@@ -4972,15 +4976,28 @@ app.get('/api/ml-unique-id/options', async (req, res) => {
       SELECT DISTINCT
         nml.MLUniqueID,
         CONCAT_WS(' - ', nml.Detail, nml.SubDetail) AS Detail,
+        nml.SubDetail,
+        nml.SubDuration,
         nml.fkGranth,
+        
         nml.Number,
         nml.Topic,
-        nml.ContentFrom,
         nml.SatsangStart,
         nml.SatsangEnd,
+        nml.ContentFrom,
+        
         nml.fkCity,
-        nml.SubDuration,
-        nml.Remarks
+        
+        nml.Remarks,
+        -- Add the new columns here
+        nml.ContentTo,
+        nml.\`Segment Category\`,
+        nml.FootageType,
+        nml.EditingStatus,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.FootageSrNo,
+        nml.LogSerialNo
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
