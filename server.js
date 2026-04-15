@@ -389,12 +389,22 @@ const mapBodyToRow = (body, headers, existingRow = [], userEmail = "System") => 
   
   headers.forEach((h, index) => {
       const header = (h || "").trim().toLowerCase();
+       if (header === "statusid") {
+          row[index] = body._status || body.StatusID || row[index];
+      }  
+
+     else if  (header === "key") 
+          row[index] = body.Key || row[index];
       
-      if (header === "event code" || header === "eventcode" || header === "fkeventcode") 
+
+      else if (header === "event code" || header === "eventcode" || header === "fkeventcode") 
           row[index] = body.fkEventCode || body.EventCode || row[index];
           
-      else if (header === "event name" || header === "eventname" || header === "recording name" || header === "recordingname") 
-          row[index] = body.EventName || body.RecordingName || row[index];
+      else if (header === "event name" || header === "eventname") 
+    row[index] = body.EventName !== undefined ? body.EventName : row[index];
+    
+else if (header === "recording name" || header === "recordingname") 
+    row[index] = body.RecordingName !== undefined ? body.RecordingName : row[index];
           
       else if (header === "year" || header === "yr") 
           row[index] = body.Yr || row[index];
@@ -4188,6 +4198,7 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
 
     // Key map for filterable columns
     const filterableColumns = [
+      "Key",
       "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
       "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
       "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
@@ -4321,13 +4332,16 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
     });
 
     const client = await auth.getClient();
-    const googleSheets = google.sheets({ version: "v4", auth: client });
+      const googleSheets = google.sheets({ version: "v4", auth: client });
     const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
     const sheetName = "Sheet1"; 
 
     const body = req.body || {};
-    const recordingCode = (body.RecordingCode || "").trim();
-    const mlUniqueId = (body.MLUniqueID || "").trim();
+    
+    // --- GENERATE PERMANENT KEY IF NEW ---
+    if (!body.Key) {
+        body.Key = `ID-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    }
 
     const checkRes = await googleSheets.spreadsheets.values.get({
       spreadsheetId,
@@ -4338,29 +4352,21 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
     if (rows.length === 0) return res.status(500).json({ error: "Sheet is empty." });
 
     const headers = rows[0];
-    
-    const drCodeIndex = headers.findIndex(h => {
-        const cl = (h||"").trim().toLowerCase(); return cl === "recording code" || cl === "recordingcode";
-    });
-    const mlIdIndex = headers.findIndex(h => {
-        const cl = (h||"").trim().toLowerCase(); return cl === "ml unique id" || cl === "mluniqueid";
-    });
+    const keyIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "key");
     const logchatsIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "logchats");
 
     let existingRowIndex = -1;
 
-    if (rows.length > 1 && drCodeIndex !== -1) {
+    // Search by Key first (Most accurate)
+    if (rows.length > 1 && keyIndex !== -1) {
       existingRowIndex = rows.findIndex((r, idx) => {
           if (idx === 0) return false;
-          const matchDr = (r[drCodeIndex] || "").trim() === recordingCode;
-          const matchMl = mlIdIndex !== -1 ? (r[mlIdIndex] || "").trim() === mlUniqueId : true;
-          if (mlUniqueId !== "") return matchDr && matchMl;
-          return matchDr;
+          return (r[keyIndex] || "").trim() === body.Key;
       });
     }
 
-    // IF EXISTS: Update just chat
     if (existingRowIndex !== -1) {
+      // Record exists: Update only the Chat log
       const rowNumber = existingRowIndex + 1; 
       const getColumnLetter = (colIndex) => {
         let letter = '';
@@ -4379,10 +4385,10 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
         resource: { values: [[body.Logchats || ""]] }
       });
 
-      return res.status(200).json({ message: "Chat updated in Google Sheet." });
+      return res.status(200).json({ message: "Chat updated.", Key: body.Key });
     } 
 
-    // IF NEW: Pass empty array for existing data
+    // New Record: Add full row with Key
     const newRow = mapBodyToRow(body, headers, [], req.user && req.user.email);
     
     await googleSheets.spreadsheets.values.append({
@@ -4392,7 +4398,7 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       resource: { values: [newRow] },
     });
 
-    res.status(201).json({ message: "Added to Google Sheet successfully." });
+    res.status(201).json({ message: "Added successfully.", Key: body.Key });
 
   } catch (err) {
     console.error("❌ POST Error:", err);
@@ -4400,8 +4406,10 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
   }
 });
 
-
 // --- PUT: Update Entry in Google Sheet ---
+// --- PUT: Update Entry in Google Sheet with Workflow Enforcement ---
+// --- PUT: Update Entry in Google Sheet with Workflow Enforcement ---
+// --- PUT: Update Entry in Google Sheet with StatusID Mapping & Workflow Locks ---
 app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, res) => {
   try {
     const auth = new GoogleAuth({
@@ -4418,53 +4426,55 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
 
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: "v4", auth: client });
-    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
-    const sheetName = "Sheet1"; 
-    
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
+    const sheetName = "Sheet1";
+
     const body = req.body || {};
-    const recordingCode = (body.RecordingCode || "").trim();
-    const mlUniqueId = (body.MLUniqueID || "").trim();
+    const trackingKey = (body.Key || "").trim();
 
-    if (!recordingCode) return res.status(400).json({ error: "RecordingCode required." });
+    if (!trackingKey) return res.status(400).json({ error: "Missing Key identifier." });
 
-    const checkRes = await googleSheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sheetName}`, 
-    });
+    // 1. Get User Roles
+   const userRoles = (req.user.role || "").toLowerCase();
+  const isAdmin = userRoles.includes("admin") || userRoles.includes("owner");
+  const isValidator = userRoles.includes("data validator");
+  const isIngester = userRoles.includes("ingester") || isAdmin;
+  const isSubmitter = userRoles.includes("submitter") || isAdmin;
 
+    // 2. Fetch current status from Sheet
+    const checkRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}` });
     const rows = checkRes.data.values || [];
-    if (rows.length === 0) return res.status(500).json({ error: "Sheet is empty." });
-
     const headers = rows[0];
-    const drCodeIndex = headers.findIndex(h => {
-        const cl = (h||"").trim().toLowerCase(); return cl === "recording code" || cl === "recordingcode";
-    });
-    const mlIdIndex = headers.findIndex(h => {
-        const cl = (h||"").trim().toLowerCase(); return cl === "ml unique id" || cl === "mluniqueid";
-    });
+    const keyIndex = headers.findIndex(h => h.toLowerCase() === "key");
+    const statusIdIndex = headers.findIndex(h => h.toLowerCase() === "statusid");
 
-    let rowIndex = -1;
+    const rowIndex = rows.findIndex((r, idx) => idx > 0 && (r[keyIndex] || "").toString().trim() === trackingKey);
+    if (rowIndex === -1) return res.status(404).json({ error: "Entry not found." });
 
-    if (rows.length > 1 && drCodeIndex !== -1) {
-      rowIndex = rows.findIndex((r, idx) => {
-          if (idx === 0) return false;
-          const matchDr = (r[drCodeIndex] || "").trim() === recordingCode;
-          const matchMl = mlIdIndex !== -1 ? (r[mlIdIndex] || "").trim() === mlUniqueId : true;
-          if (mlUniqueId !== "") return matchDr && matchMl;
-          return matchDr;
-      });
+    const currentStatusID = (rows[rowIndex][statusIdIndex] || "").toLowerCase().trim();
+  const targetStatusID = (body._status || "").toLowerCase().trim();
+    // 3. ENFORCE WORKFLOW LOCKS
+   if (!isAdmin && !isValidator) {
+    
+    // Submitter restrictions
+    if (userRoles.includes("submitter") && !userRoles.includes("ingester")) {
+        if (currentStatusID !== "revision") {
+            return res.status(403).json({ error: "Submitters can only edit 'Needs Revision' entries." });
+        }
     }
 
-    if (rowIndex === -1) {
-      return res.status(404).json({ error: "Entry not found in Sheet." });
+    // Ingester restrictions
+    if (userRoles.includes("ingester")) {
+        if (currentStatusID === "submission_confirmed" || currentStatusID === "complete") {
+            return res.status(403).json({ error: "Ingesters cannot change confirmed or completed records." });
+        }
     }
-
-    const rowNumber = rowIndex + 1; 
-    const existingRowData = rows[rowIndex];
-
-    // PASS existing data to mapBodyToRow so it preserves what isn't changing
-    const updatedRow = mapBodyToRow(body, headers, existingRowData, req.user && req.user.email);
-
+}
+    // 4. Update the Row
+    const rowNumber = rowIndex + 1;
+    const updatedRow = mapBodyToRow(body, headers, rows[rowIndex], req.user.email);
+    
+    // Dynamically calculate column range
     const getColumnLetter = (colIndex) => {
         let letter = '';
         while (colIndex >= 0) {
@@ -4477,25 +4487,43 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
 
     await googleSheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A${rowNumber}:${lastLetter}${rowNumber}`, 
+      range: `${sheetName}!A${rowNumber}:${lastLetter}${rowNumber}`,
       valueInputOption: "USER_ENTERED",
       resource: { values: [updatedRow] }
     });
 
-    res.status(200).json({ message: "Entry updated successfully." });
+    res.status(200).json({ message: "Updated successfully", status: targetStatusID || currentStatusID });
 
   } catch (err) {
     console.error("❌ PUT Error:", err);
-    res.status(500).json({ error: "Failed to update.", details: err.message });
+    res.status(500).json({ error: "Sync failed.", details: err.message });
   }
 });
 // --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
+// --- POST: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
 app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) => {
+  // --- ROLE CHECK: Only Validator or Admin ---
+  const userRoles = (req.user.role || "").toLowerCase().split(",").map(r => r.trim());
+  const canApprove = userRoles.includes("data validator") || userRoles.includes("admin") || userRoles.includes("owner");
+
+  if (!canApprove) {
+    return res.status(403).json({ error: "Access Denied. Only Data Validators or Admins can approve records to the database." });
+  }
+
   const connection = await db.getConnection();
+  let transactionStarted = false;
+
   try {
     const data = req.body;
 
-    // uppercase the media name before inserting
+    // Check if status is "complete" before allowing push to DB
+    // This is an extra safety layer
+   const status = (data._status || data.StatusID || "").toLowerCase();
+
+if (status !== "complete" && !userRoles.includes("admin")) {
+    return res.status(400).json({ error: "Only entries marked as 'Complete' can be approved." });
+}
+
     const fkMediaName = data.fkMediaName ? String(data.fkMediaName).toUpperCase() : null;
 
     await connection.beginTransaction();
@@ -4534,9 +4562,7 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
 
     await connection.query(insertQuery, insertParams);
 
-    // ---------------------------------------------------------
-    // ACTION 2: UPDATE NewMediaLog (Link AudioWAVDRCode or AudioMP3DRCode to MLUniqueID)
-    // ---------------------------------------------------------
+    // ACTION 2: Update NewMediaLog linkage
     if (data.MLUniqueID) {
       let updateField = null;
       let updateValue = null;
@@ -4557,24 +4583,22 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
               LastModifiedTimestamp = NOW()
           WHERE MLUniqueID = ?
         `;
-       await connection.query(updateQuery, [
-  updateValue,
-  (req.user && req.user.email) || '', // Auto-fill LastModifiedBy from authenticated user
-  data.MLUniqueID
-]);
-        console.log(`✅ Linked ${updateField} ${updateValue} to MLID ${data.MLUniqueID}`);
+        await connection.query(updateQuery, [
+          updateValue,
+          req.user.email || 'System', 
+          data.MLUniqueID
+        ]);
       }
     }
 
-    // 2. COMMIT TRANSACTION (Save both changes)
-   await connection.commit();
+    await connection.commit();
     res.status(200).json({ message: "Entry approved: DR created and Media Log updated." });
 
   } catch (err) {
     if (transactionStarted) {
       try { await connection.rollback(); } catch (rollbackErr) { /* ignore */ }
     }
-    console.error("❌ Transaction Error in /api/digitalrecording/approve:", err);
+    console.error("❌ Approval Transaction Error:", err);
     res.status(500).json({ error: "Transaction failed.", details: err.message });
   } finally {
     connection.release();
@@ -5312,9 +5336,9 @@ app.get("/api/users/submitters-ml-list", authenticateToken, async (_req, res) =>
 });
 // --- ADD A NEW USER ---
 app.post("/api/users", authenticateToken, async (req, res) => {
-  const { name, email, role, department, location, teams, permissions } = req.body;
-
-  if (!name || !email || !role) {
+  const { name, email, roles, department, location, teams, permissions } = req.body;
+const rolesString = Array.isArray(roles) ? roles.join(', ') : roles;
+  if (!name || !email || !roles) {
     return res.status(400).json({ error: "Name, email, and role are required." });
   }
 
@@ -5326,7 +5350,7 @@ app.post("/api/users", authenticateToken, async (req, res) => {
     const joinedDate = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     const status = 'Active';
     const lastActive = now.toISOString();
-
+const rolesString = Array.isArray(roles) ? roles.join(', ') : roles;
     // Ensure teams and permissions are properly formatted
     const formattedTeams = Array.isArray(teams) ? teams : [];
     const formattedPermissions = permissions || [];
@@ -5336,7 +5360,7 @@ app.post("/api/users", authenticateToken, async (req, res) => {
       newId,
       name,
       email,
-      role,
+      rolesString,
       status,
       joinedDate,
       lastActive,
@@ -5359,7 +5383,7 @@ app.post("/api/users", authenticateToken, async (req, res) => {
       id: newId,
       name,
       email,
-      role,
+      role: rolesString,
       status,
       joinedDate,
       lastActive,
