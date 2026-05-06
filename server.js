@@ -480,7 +480,36 @@ else if (header === "recording name" || header === "recordingname")
           
       else if (header === "remarks") 
           row[index] = body.Remarks || row[index];
-          
+       // --- ADD THESE MAPPINGS ---
+else if (header === "segment category") 
+    row[index] = body["Segment Category"] || row[index];
+
+else if (header === "footage type" || header === "footagetype") 
+    row[index] = body.FootageType || row[index];
+
+else if (header === "editing status" || header === "editingstatus") 
+    row[index] = body.EditingStatus || row[index];
+
+else if (header === "counter from" || header === "counterfrom") 
+    row[index] = body.CounterFrom || row[index];
+
+else if (header === "counter to" || header === "counterto") 
+    row[index] = body.CounterTo || row[index];
+
+else if (header === "footage sr no" || header === "footagesrno") 
+    row[index] = body.FootageSrNo || row[index];
+
+else if (header === "log serial no" || header === "logserialno") 
+    row[index] = body.LogSerialNo || row[index];
+
+else if (header === "date to" || header === "contentto")
+    row[index] = body.ContentTo || row[index];
+
+else if (header === "sub detail" || header === "subdetail") 
+    row[index] = body.SubDetail || row[index];
+
+       else if (header === "event ref mlid" || header === "eventrefmlid") 
+          row[index] = body.EventRefMLID || row[index];
       // Add this new mapping for DistributionDriveLink
       else if (header === "distribution drive link" || header === "distributiondrivelink") 
           row[index] = body.DistributionDriveLink || row[index];
@@ -4197,16 +4226,26 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
     });
 
     // Key map for filterable columns
-    const filterableColumns = [
-      "Key",
-      "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
-      "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
-      "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
-      "RecordingRemarks", "MLUniqueID", "AudioWAVDRCode", "AudioMP3DRCode",
-      "fkGranth", "Number", "Topic", "ContentFrom", "SatsangStart", "SatsangEnd",
-      "fkCity", "SubDuration", "Detail", "Remarks", "CreatedTimestamp",
-      "LastModifiedBy", "Logchats",
-    ];
+  const filterableColumns = [
+  "Key",
+  "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
+  "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
+  "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
+  "RecordingRemarks", "MLUniqueID", "AudioWAVDRCode", "AudioMP3DRCode",
+  "fkGranth", "Number", "Topic", "ContentFrom", "SatsangStart", "SatsangEnd",
+  "fkCity", "SubDuration", "Detail", "Remarks", "CreatedTimestamp",
+  "LastModifiedBy", "Logchats",
+  "EventRefMLID", // ADD THIS
+  "ContentTo",
+  "SatsangEnd",
+  "Segment Category",
+  "FootageType",
+  "EditingStatus",
+  "CounterFrom",
+  "CounterTo",
+  "FootageSrNo",
+  "LogSerialNo",  // ADD THIS (matches exactly what might be in Sheet header)
+];
 
     let filteredData = allData;
     if (search) {
@@ -4458,10 +4497,13 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
     
     // Submitter restrictions
     if (userRoles.includes("submitter") && !userRoles.includes("ingester")) {
-        if (currentStatusID !== "revision") {
-            return res.status(403).json({ error: "Submitters can only edit 'Needs Revision' entries." });
-        }
+        // ALLOW update if status is 'pending' OR 'revision'
+        if (currentStatusID !== "revision" && currentStatusID !== "pending") {
+            return res.status(403).json({ 
+                error: "Submitters can only update entries that are in 'Draft/Pending' or 'Needs Revision' status." 
+            });
     }
+}
 
     // Ingester restrictions
     if (userRoles.includes("ingester")) {
@@ -4993,28 +5035,25 @@ app.get('/api/recording-options', async (req, res) => {
 // ...existing code...
 app.get('/api/ml-unique-id/options', async (req, res) => {
   try {
-    const { eventCode } = req.query;           // optional filter from client
+    const { eventCode } = req.query;
     const params = [];
 
     let query = `
       SELECT DISTINCT
         nml.MLUniqueID,
-        CONCAT_WS(' - ', nml.Detail, nml.SubDetail) AS Detail,
+        nml.EventRefMLID,
+        nml.Detail,
         nml.SubDetail,
         nml.SubDuration,
         nml.fkGranth,
-        
         nml.Number,
         nml.Topic,
         nml.SatsangStart,
         nml.SatsangEnd,
         nml.ContentFrom,
-        
-        nml.fkCity,
-        
-        nml.Remarks,
-        -- Add the new columns here
         nml.ContentTo,
+        nml.fkCity,
+        nml.Remarks,
         nml.\`Segment Category\`,
         nml.FootageType,
         nml.EditingStatus,
@@ -5028,11 +5067,11 @@ app.get('/api/ml-unique-id/options', async (req, res) => {
     `;
 
     if (eventCode && eventCode.trim() !== '') {
-      query += `WHERE dr.fkEventCode = ?\n`;
+      query += ` WHERE dr.fkEventCode = ? `;
       params.push(eventCode.trim());
     }
 
-    query += `ORDER BY nml.MLUniqueID DESC`;
+    query += ` ORDER BY nml.MLUniqueID DESC`;
 
     const [rows] = await db.query(query, params);
     res.status(200).json(rows);
