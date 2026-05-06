@@ -7,6 +7,8 @@ const { google } = require("googleapis");
 const { GoogleAuth } = require('google-auth-library');
 const nodemailer = require("nodemailer");
 const app = express();
+const NodeCache = require("node-cache");
+const myCache = new NodeCache({ stdTTL: 1 });
 app.use(cors());
 
 // INCREASE LIMIT TO 500MB FOR MASSIVE EXPORTS
@@ -4175,9 +4177,17 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
     const search = req.query.search?.trim()?.toLowerCase() || "";
+    
+    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
+    const cacheKey = `sheet_data_${spreadsheetId}`;
 
-    // Credentials from .env
-    const credentials = {
+    // 1. CHECK CACHE FIRST
+    let allData = myCache.get(cacheKey);
+
+    if (!allData) {
+      console.log("Cache miss - fetching from Google Sheets");
+      
+      const credentials = {
       type: process.env.SERVICE_ACCOUNT_TYPE,
       project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
       private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
@@ -4190,81 +4200,77 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
       client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
     };
 
-    const auth = new GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-
-    const client = await auth.getClient();
-    const googleSheets = google.sheets({ version: "v4", auth: client });
-    const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"; 
-
-    const response = await googleSheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "Sheet1", 
-    });
-
-    const rows = response.data.values;
-
-    // ✅ FIX START: Return empty data structure instead of 404 Error
-    if (!rows || rows.length <= 1) {
-      console.log("ℹ️ Sheet accessed successfully but contains no data rows.");
-      return res.json({
-        data: [],
-        pagination: { page, limit, totalItems: 0, totalPages: 0 },
+      const auth = new GoogleAuth({
+        credentials,
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
       });
+
+      const client = await auth.getClient();
+      const googleSheets = google.sheets({ version: "v4", auth: client });
+
+      const response = await googleSheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "Sheet1", 
+      });
+
+      const rows = response.data.values;
+
+      if (!rows || rows.length <= 1) {
+        return res.json({
+          data: [],
+          pagination: { page, limit, totalItems: 0, totalPages: 0 },
+        });
+      }
+
+      const headers = rows[0];
+      allData = rows.slice(1).map((row) => {
+        const obj = {};
+        headers.forEach((h, i) => {
+          obj[h] = row[i] || "";
+        });
+        return obj;
+      });
+
+      // 2. SAVE TO CACHE (Store the raw array of objects)
+      myCache.set(cacheKey, allData);
+    } else {
+      console.log("Cache hit - serving from memory");
     }
-    // ✅ FIX END
 
-    const headers = rows[0];
-    const allData = rows.slice(1).map((row) => {
-      const obj = {};
-      headers.forEach((h, i) => {
-        obj[h] = row[i] || "";
-      });
-      return obj;
-    });
-
-    // Key map for filterable columns
-  const filterableColumns = [
-  "Key",
-  "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
-  "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
-  "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
-  "RecordingRemarks", "MLUniqueID", "AudioWAVDRCode", "AudioMP3DRCode",
-  "fkGranth", "Number", "Topic", "ContentFrom", "SatsangStart", "SatsangEnd",
-  "fkCity", "SubDuration", "Detail", "Remarks", "CreatedTimestamp",
-  "LastModifiedBy", "Logchats",
-  "EventRefMLID", // ADD THIS
-  "ContentTo",
-  "SatsangEnd",
-  "Segment Category",
-  "FootageType",
-  "EditingStatus",
-  "CounterFrom",
-  "CounterTo",
-  "FootageSrNo",
-  "LogSerialNo",  // ADD THIS (matches exactly what might be in Sheet header)
-];
+    // 3. FILTERING LOGIC (Always done on the data, whether from cache or API)
+    const filterableColumns = [
+      "Key", "fkEventCode", "EventName", "Yr", "NewEventCategory", "RecordingName",
+      "RecordingCode", "Duration", "Filesize", "FilesizeInBytes", "fkMediaName",
+      "BitRate", "NoOfFiles", "AudioBitrate", "Masterquality", "PreservationStatus",
+      "RecordingRemarks", "MLUniqueID", "AudioWAVDRCode", "AudioMP3DRCode",
+      "fkGranth", "Number", "Topic", "ContentFrom", "SatsangStart", "SatsangEnd",
+      "fkCity", "SubDuration", "Detail", "Remarks", "CreatedTimestamp",
+      "LastModifiedBy", "Logchats", "EventRefMLID", "ContentTo", "Segment Category",
+      "FootageType", "EditingStatus", "CounterFrom", "CounterTo", "FootageSrNo", "LogSerialNo",
+    ];
 
     let filteredData = allData;
+
+    // Apply Global Search
     if (search) {
       filteredData = allData.filter((row) =>
         filterableColumns.some((key) =>
-          (row[key] || "").toLowerCase().includes(search)
+          (row[key] || "").toString().toLowerCase().includes(search)
         )
       );
     }
 
+    // Apply Column-Specific Filters
     Object.keys(req.query).forEach((key) => {
-      if (filterableColumns.includes(key)) {
+      if (filterableColumns.includes(key) && req.query[key]) {
         const value = req.query[key].toLowerCase();
         filteredData = filteredData.filter((row) =>
-          (row[key] || "").toLowerCase().includes(value)
+          (row[key] || "").toString().toLowerCase().includes(value)
         );
       }
     });
 
+    // 4. PAGINATION
     const totalItems = filteredData.length;
     const totalPages = Math.ceil(totalItems / limit);
     const paginatedData = filteredData.slice(offset, offset + limit);
@@ -4273,9 +4279,9 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
       data: paginatedData,
       pagination: { page, limit, totalItems, totalPages },
     });
+
   } catch (err) {
     console.error("❌ Google Sheets API Error:", err);
-    // Return 500 for actual errors, so the frontend knows it crashed rather than just being "missing"
     res.status(500).json({ error: "Failed to fetch data from Google Sheet." });
   }
 });
@@ -4437,7 +4443,8 @@ app.post("/api/google-sheet/digital-recordings", authenticateToken, async (req, 
       resource: { values: [newRow] },
     });
 
-    res.status(201).json({ message: "Added successfully.", Key: body.Key });
+    myCache.del("sheet_data_1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE"); 
+res.status(201).json({ message: "Added successfully.", Key: body.Key });
 
   } catch (err) {
     console.error("❌ POST Error:", err);
@@ -4534,8 +4541,8 @@ app.put("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
       resource: { values: [updatedRow] }
     });
 
-    res.status(200).json({ message: "Updated successfully", status: targetStatusID || currentStatusID });
-
+   myCache.del("sheet_data_1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE");
+res.status(200).json({ message: "Updated successfully" });
   } catch (err) {
     console.error("❌ PUT Error:", err);
     res.status(500).json({ error: "Sync failed.", details: err.message });
