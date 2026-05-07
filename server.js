@@ -4222,14 +4222,17 @@ app.get("/api/google-sheet/digital-recordings", authenticateToken, async (req, r
         });
       }
 
-      const headers = rows[0];
-      allData = rows.slice(1).map((row) => {
-        const obj = {};
-        headers.forEach((h, i) => {
-          obj[h] = row[i] || "";
-        });
-        return obj;
-      });
+       const headers = rows[0];
+       allData = rows.slice(1).map((row) => {
+         const obj = {};
+         headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+         return obj;
+       });
+
+        allData = allData.filter(item => {
+           const s = (item.StatusID || item.statusid || "").toLowerCase().trim();
+           return s !== 'approved';
+       });
 
       // 2. SAVE TO CACHE (Store the raw array of objects)
       myCache.set(cacheKey, allData);
@@ -4641,13 +4644,49 @@ if (status !== "complete" && !userRoles.includes("admin")) {
     }
 
     await connection.commit();
-    res.status(200).json({ message: "Entry approved: DR created and Media Log updated." });
+   // --- NEW: UPDATE GOOGLE SHEET STATUS TO "approved" ---
+    // This makes sure the record stays in the sheet but gets "archived" from the queue
+    try {
+        const authSheet = new google.auth.GoogleAuth({
+            credentials: {
+                type: process.env.SERVICE_ACCOUNT_TYPE,
+                project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+                private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+                client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+            },
+            scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+        });
+        const client = await authSheet.getClient();
+        const googleSheets = google.sheets({ version: "v4", auth: client });
+        const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
+        const sheetName = "Sheet1";
+
+        const sheetRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
+        const rows = sheetRes.data.values || [];
+        const headers = rows[0];
+        const keyIndex = headers.findIndex(h => h.toLowerCase() === "key");
+        const statusIdIndex = headers.findIndex(h => h.toLowerCase() === "statusid");
+
+        const rowIndex = rows.findIndex((r, idx) => idx > 0 && r[keyIndex] === data.Key);
+
+        if (rowIndex !== -1 && statusIdIndex !== -1) {
+            const colLetter = String.fromCharCode(65 + statusIdIndex); // Simple A-Z mapping
+            await googleSheets.spreadsheets.values.update({
+                spreadsheetId,
+                range: `${sheetName}!${colLetter}${rowIndex + 1}`,
+                valueInputOption: "USER_ENTERED",
+                resource: { values: [["approved"]] }
+            });
+            myCache.del(`sheet_data_${spreadsheetId}`); // Clear cache so frontend gets fresh data
+        }
+    } catch (sheetErr) {
+        console.error("MySQL saved, but Google Sheet status update failed:", sheetErr);
+    }
+
+    res.status(200).json({ message: "Entry approved and marked in Sheet." });
 
   } catch (err) {
-    if (transactionStarted) {
-      try { await connection.rollback(); } catch (rollbackErr) { /* ignore */ }
-    }
-    console.error("❌ Approval Transaction Error:", err);
+    if (transactionStarted) await connection.rollback();
     res.status(500).json({ error: "Transaction failed.", details: err.message });
   } finally {
     connection.release();
