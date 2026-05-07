@@ -4646,38 +4646,73 @@ if (status !== "complete" && !userRoles.includes("admin")) {
     await connection.commit();
    // --- NEW: UPDATE GOOGLE SHEET STATUS TO "approved" ---
     // This makes sure the record stays in the sheet but gets "archived" from the queue
-    try {
+  try {
         const authSheet = new google.auth.GoogleAuth({
             credentials: {
                 type: process.env.SERVICE_ACCOUNT_TYPE,
                 project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+                private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
                 private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
                 client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
             },
             scopes: ["https://www.googleapis.com/auth/spreadsheets"],
         });
+        
         const client = await authSheet.getClient();
         const googleSheets = google.sheets({ version: "v4", auth: client });
         const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
         const sheetName = "Sheet1";
 
+        // Fetch current rows to find the index
         const sheetRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
         const rows = sheetRes.data.values || [];
         const headers = rows[0];
-        const keyIndex = headers.findIndex(h => h.toLowerCase() === "key");
-        const statusIdIndex = headers.findIndex(h => h.toLowerCase() === "statusid");
+        
+        // Find Column Indexes
+        const keyIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "key");
+        const statusIdIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "statusid");
+        const qcStatusIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "qc status");
 
+        // Find the specific row by its Unique Key
         const rowIndex = rows.findIndex((r, idx) => idx > 0 && r[keyIndex] === data.Key);
 
-        if (rowIndex !== -1 && statusIdIndex !== -1) {
-            const colLetter = String.fromCharCode(65 + statusIdIndex); // Simple A-Z mapping
-            await googleSheets.spreadsheets.values.update({
-                spreadsheetId,
-                range: `${sheetName}!${colLetter}${rowIndex + 1}`,
-                valueInputOption: "USER_ENTERED",
-                resource: { values: [["approved"]] }
-            });
-            myCache.del(`sheet_data_${spreadsheetId}`); // Clear cache so frontend gets fresh data
+       if (rowIndex !== -1) {
+    const rowNumber = rowIndex + 1;
+    
+    // REPLACE the old getColLetter with this robust version:
+    const getColumnLetter = (colIndex) => {
+        let letter = '';
+        while (colIndex >= 0) {
+            letter = String.fromCharCode((colIndex % 26) + 65) + letter;
+            colIndex = Math.floor(colIndex / 26) - 1;
+        }
+        return letter;
+    };
+
+    // Update StatusID to "approved"
+    if (statusIdIndex !== -1) {
+        const statusLetter = getColumnLetter(statusIdIndex);
+        await googleSheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${sheetName}!${statusLetter}${rowNumber}`,
+            valueInputOption: "USER_ENTERED",
+            resource: { values: [["approved"]] }
+        });
+    }
+    
+    // Update QC Status
+    if (qcStatusIndex !== -1) {
+        const qcLetter = getColumnLetter(qcStatusIndex);
+        await googleSheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${sheetName}!${qcLetter}${rowNumber}`,
+            valueInputOption: "USER_ENTERED",
+            resource: { values: [["Approved & Linked"]] }
+        });
+    }
+
+            // Clear the cache so frontend gets fresh filtered data
+            myCache.del(`sheet_data_${spreadsheetId}`);
         }
     } catch (sheetErr) {
         console.error("MySQL saved, but Google Sheet status update failed:", sheetErr);
