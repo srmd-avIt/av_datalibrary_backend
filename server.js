@@ -4554,12 +4554,11 @@ res.status(200).json({ message: "Updated successfully" });
 // --- NEW ENDPOINT: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
 // --- POST: APPROVE ENTRY (INSERT DR + UPDATE MEDIALOG) ---
 app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) => {
-  // --- ROLE CHECK: Only Validator or Admin ---
   const userRoles = (req.user.role || "").toLowerCase().split(",").map(r => r.trim());
   const canApprove = userRoles.includes("data validator") || userRoles.includes("admin") || userRoles.includes("owner");
 
   if (!canApprove) {
-    return res.status(403).json({ error: "Access Denied. Only Data Validators or Admins can approve records to the database." });
+    return res.status(403).json({ error: "Access Denied." });
   }
 
   const connection = await db.getConnection();
@@ -4567,162 +4566,131 @@ app.post('/api/digitalrecording/approve', authenticateToken, async (req, res) =>
 
   try {
     const data = req.body;
+    const status = (data._status || data.StatusID || "").toLowerCase();
 
-    // Check if status is "complete" before allowing push to DB
-    // This is an extra safety layer
-   const status = (data._status || data.StatusID || "").toLowerCase();
-
-if (status !== "complete" && !userRoles.includes("admin")) {
-    return res.status(400).json({ error: "Only entries marked as 'Complete' can be approved." });
-}
+    if (status !== "complete" && !userRoles.includes("admin")) {
+      return res.status(400).json({ error: "Only entries marked as 'Complete' can be approved." });
+    }
 
     const fkMediaName = data.fkMediaName ? String(data.fkMediaName).toUpperCase() : null;
 
     await connection.beginTransaction();
     transactionStarted = true;
 
+    // Use INSERT IGNORE or check for existence to prevent 500 on duplicate keys
     const insertQuery = `
       INSERT INTO DigitalRecordings (
         fkEventCode, RecordingName, RecordingCode, Duration,
         Masterquality, fkMediaName, Filesize, DistributionDriveLink, FilesizeInBytes,
-        NoOfFiles, RecordingRemarks,
-        AudioBitrate, AudioTotalDuration,
-        PreservationStatus,
-        LastModifiedTimestamp
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        'Preserve',
-        NOW()
-      )
+        NoOfFiles, RecordingRemarks, AudioBitrate, AudioTotalDuration,
+        PreservationStatus, LastModifiedTimestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Preserve', NOW())
+      ON DUPLICATE KEY UPDATE RecordingName = VALUES(RecordingName), LastModifiedTimestamp = NOW()
     `;
 
     const insertParams = [
-      data.fkEventCode,
-      data.RecordingName,
-      data.RecordingCode,
-      data.Duration,
-      data.Masterquality,
+      data.fkEventCode || null,
+      data.RecordingName || null,
+      data.RecordingCode, // Primary identifier
+      data.Duration || null,
+      data.Masterquality || null,
       fkMediaName,
-      data.Filesize,
-      data.DistributionDriveLink,
-      data.FilesizeInBytes,
-      data.NoOfFiles,
-      data.RecordingRemarks,
-      data.AudioBitrate,
-      data.AudioTotalDuration
+      data.Filesize || 0,
+      data.DistributionDriveLink || null,
+      data.FilesizeInBytes || 0,
+      data.NoOfFiles || 1,
+      data.RecordingRemarks || null,
+      data.AudioBitrate || 0,
+      data.AudioTotalDuration || null
     ];
 
     await connection.query(insertQuery, insertParams);
 
-    // ACTION 2: Update NewMediaLog linkage
+    // Link MediaLog
     if (data.MLUniqueID) {
       let updateField = null;
-      let updateValue = null;
+      if (data.Masterquality === "Audio - High Res") updateField = "AudioWAVDRCode";
+      else if (data.Masterquality === "Audio - Low Res") updateField = "AudioMP3DRCode";
 
-      if (data.Masterquality === "Audio - High Res") {
-        updateField = "AudioWAVDRCode";
-        updateValue = data.RecordingCode;
-      } else if (data.Masterquality === "Audio - Low Res") {
-        updateField = "AudioMP3DRCode";
-        updateValue = data.RecordingCode;
-      }
-
-      if (updateField && updateValue) {
-        const updateQuery = `
-          UPDATE NewMediaLog 
-          SET ${updateField} = ?, 
-              LastModifiedBy = ?, 
-              LastModifiedTimestamp = NOW()
-          WHERE MLUniqueID = ?
-        `;
-        await connection.query(updateQuery, [
-          updateValue,
-          req.user.email || 'System', 
-          data.MLUniqueID
-        ]);
+      if (updateField) {
+        await connection.query(
+          `UPDATE NewMediaLog SET ${updateField} = ?, LastModifiedBy = ?, LastModifiedTimestamp = NOW() WHERE MLUniqueID = ?`,
+          [data.RecordingCode, req.user.email || 'System', data.MLUniqueID]
+        );
       }
     }
 
     await connection.commit();
-   // --- NEW: UPDATE GOOGLE SHEET STATUS TO "approved" ---
-    // This makes sure the record stays in the sheet but gets "archived" from the queue
-  try {
-        const authSheet = new google.auth.GoogleAuth({
-            credentials: {
-                type: process.env.SERVICE_ACCOUNT_TYPE,
-                project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
-                private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
-                private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
-                client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
-            },
-            scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-        });
-        
-        const client = await authSheet.getClient();
-        const googleSheets = google.sheets({ version: "v4", auth: client });
-        const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
-        const sheetName = "Sheet1";
 
-        // Fetch current rows to find the index
-        const sheetRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
-        const rows = sheetRes.data.values || [];
-        const headers = rows[0];
-        
-        // Find Column Indexes
-        const keyIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "key");
-        const statusIdIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "statusid");
-        const qcStatusIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "qc status");
+    // --- Update Google Sheet ---
+    try {
+      const authSheet = new google.auth.GoogleAuth({
+        credentials: {
+          type: process.env.SERVICE_ACCOUNT_TYPE,
+          project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+          private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+          client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+        },
+        scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      });
+      
+      const client = await authSheet.getClient();
+      const googleSheets = google.sheets({ version: "v4", auth: client });
+      const spreadsheetId = "1l6nTIagLgxAp-0q_rpUxd0TMaWN6Gh9eXJMsj_iHPcE";
+      const sheetName = "Sheet1";
 
-        // Find the specific row by its Unique Key
-        const rowIndex = rows.findIndex((r, idx) => idx > 0 && r[keyIndex] === data.Key);
+      const sheetRes = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
+      const rows = sheetRes.data.values || [];
+      const headers = rows[0];
+      
+      const keyIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "key");
+      const statusIdIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "statusid");
+      const qcStatusIndex = headers.findIndex(h => (h||"").trim().toLowerCase() === "qc status");
 
-       if (rowIndex !== -1) {
-    const rowNumber = rowIndex + 1;
-    
-    // REPLACE the old getColLetter with this robust version:
-    const getColumnLetter = (colIndex) => {
-        let letter = '';
-        while (colIndex >= 0) {
+      const rowIndex = rows.findIndex((r, idx) => idx > 0 && r[keyIndex] === data.Key);
+
+      if (rowIndex !== -1) {
+        const rowNumber = rowIndex + 1;
+        const getColumnLetter = (colIndex) => {
+          let letter = '';
+          while (colIndex >= 0) {
             letter = String.fromCharCode((colIndex % 26) + 65) + letter;
             colIndex = Math.floor(colIndex / 26) - 1;
-        }
-        return letter;
-    };
+          }
+          return letter;
+        };
 
-    // Update StatusID to "approved"
-    if (statusIdIndex !== -1) {
-        const statusLetter = getColumnLetter(statusIdIndex);
-        await googleSheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `${sheetName}!${statusLetter}${rowNumber}`,
-            valueInputOption: "USER_ENTERED",
-            resource: { values: [["approved"]] }
-        });
-    }
-    
-    // Update QC Status
-    if (qcStatusIndex !== -1) {
-        const qcLetter = getColumnLetter(qcStatusIndex);
-        await googleSheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: `${sheetName}!${qcLetter}${rowNumber}`,
-            valueInputOption: "USER_ENTERED",
-            resource: { values: [["Approved & Linked"]] }
-        });
-    }
-
-            // Clear the cache so frontend gets fresh filtered data
-            myCache.del(`sheet_data_${spreadsheetId}`);
+        const updates = [];
+        if (statusIdIndex !== -1) {
+          updates.push({
+            range: `${sheetName}!${getColumnLetter(statusIdIndex)}${rowNumber}`,
+            values: [["approved"]]
+          });
         }
+        if (qcStatusIndex !== -1) {
+          updates.push({
+            range: `${sheetName}!${getColumnLetter(qcStatusIndex)}${rowNumber}`,
+            values: [["Approved & Linked"]]
+          });
+        }
+
+        if (updates.length > 0) {
+          await googleSheets.spreadsheets.values.batchUpdate({
+            spreadsheetId,
+            resource: { valueInputOption: "USER_ENTERED", data: updates }
+          });
+        }
+      }
     } catch (sheetErr) {
-        console.error("MySQL saved, but Google Sheet status update failed:", sheetErr);
+      console.error("MySQL success, but Sheet update failed:", sheetErr.message);
     }
 
-    res.status(200).json({ message: "Entry approved and marked in Sheet." });
+    res.status(200).json({ message: "Approved successfully" });
 
   } catch (err) {
     if (transactionStarted) await connection.rollback();
-    res.status(500).json({ error: "Transaction failed.", details: err.message });
+    console.error("Approval Error:", err);
+    res.status(500).json({ error: "Transaction failed", details: err.message });
   } finally {
     connection.release();
   }
