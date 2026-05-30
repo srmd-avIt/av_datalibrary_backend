@@ -1273,12 +1273,13 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
 app.put('/api/newmedialog/formal/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
-  const {
+  let {
     fkDigitalRecordingCode,
     ContentFrom,
     ContentTo,
     Detail,
     SubDetail,
+    DetailSub,
    
     TopicSource,
     EditingStatus,
@@ -1293,6 +1294,18 @@ app.put('/api/newmedialog/formal/:MLUniqueID', authenticateToken, async (req, re
     LastModifiedBy
   } = req.body;
 const SegmentCategory = req.body['Segment Category'];
+
+  if (typeof DetailSub === 'string') {
+    const separatorIndex = DetailSub.indexOf(' - ');
+    if (separatorIndex !== -1) {
+      Detail = DetailSub.substring(0, separatorIndex).trim();
+      SubDetail = DetailSub.substring(separatorIndex + 3).trim();
+    } else {
+      Detail = DetailSub.trim();
+      SubDetail = '';
+    }
+  }
+
   if (!MLUniqueID) {
     return res.status(400).json({ error: "MLUniqueID is required." });
   }
@@ -1697,12 +1710,13 @@ app.get('/api/newmedialog/all-except-satsang/export', async (req, res) => {
 app.put('/api/newmedialog/all-except-satsang/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
-  const {
+  let {
     fkDigitalRecordingCode,
     ContentFrom,
     ContentTo,
     Detail,
     SubDetail,
+    DetailSub,
     TopicSource,
     EditingStatus,
     FootageType,
@@ -1715,6 +1729,17 @@ app.put('/api/newmedialog/all-except-satsang/:MLUniqueID', authenticateToken, as
     Remarks,
     LastModifiedBy
   } = req.body;
+
+  if (typeof DetailSub === 'string') {
+    const separatorIndex = DetailSub.indexOf(' - ');
+    if (separatorIndex !== -1) {
+      Detail = DetailSub.substring(0, separatorIndex).trim();
+      SubDetail = DetailSub.substring(separatorIndex + 3).trim();
+    } else {
+      Detail = DetailSub.trim();
+      SubDetail = '';
+    }
+  }
 
 const SegmentCategory = req.body['Segment Category'];
 
@@ -2153,11 +2178,12 @@ app.get('/api/newmedialog/satsang-extracted-clips/export', async (req, res) => {
 app.put('/api/newmedialog/satsang-extracted-clips/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
-  const {
+  let {
     fkDigitalRecordingCode,
     ContentFrom,
     Detail,
     SubDetail,
+    DetailSub,
     
     TopicSource,
     SubDuration,
@@ -2172,6 +2198,18 @@ app.put('/api/newmedialog/satsang-extracted-clips/:MLUniqueID', authenticateToke
     LastModifiedBy
   } = req.body;
 const SegmentCategory = req.body['Segment Category'];
+
+  if (typeof DetailSub === 'string') {
+    const separatorIndex = DetailSub.indexOf(' - ');
+    if (separatorIndex !== -1) {
+      Detail = DetailSub.substring(0, separatorIndex).trim();
+      SubDetail = DetailSub.substring(separatorIndex + 3).trim();
+    } else {
+      Detail = DetailSub.trim();
+      SubDetail = '';
+    }
+  }
+
   if (!MLUniqueID) {
     return res.status(400).json({ error: "MLUniqueID is required." });
   }
@@ -2903,12 +2941,23 @@ app.get('/api/newmedialog/satsang-category/export', async (req, res) => {
 app.put('/api/newmedialog/satsang-category/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
 
-  const {
-    fkDigitalRecordingCode, ContentFrom, ContentTo, Detail, SubDetail, Topic, Number,
+  let {
+    fkDigitalRecordingCode, ContentFrom, ContentTo, Detail, SubDetail, DetailSub, Topic, Number,
     fkGranth, Language, SubDuration, FootageType, fkOccasion, SpeakerSinger, fkOrganization,
     Designation, fkCountry, fkState, fkCity, Venue, Guidance, Remarks, Synopsis, Keywords,
     SatsangStart, SatsangEnd, AudioWAVDRCode, AudioMP3DRCode, LastModifiedBy
   } = req.body;
+
+  if (typeof DetailSub === 'string') {
+    const separatorIndex = DetailSub.indexOf(' - ');
+    if (separatorIndex !== -1) {
+      Detail = DetailSub.substring(0, separatorIndex).trim();
+      SubDetail = DetailSub.substring(separatorIndex + 3).trim();
+    } else {
+      Detail = DetailSub.trim();
+      SubDetail = '';
+    }
+  }
 
 const SegmentCategory = req.body['Segment Category'];
   if (!MLUniqueID) {
@@ -3577,9 +3626,9 @@ app.get('/api/newmedialog/export', async (req, res) => {
 app.put('/api/newmedialog/:MLUniqueID', authenticateToken, async (req, res) => {
   const { MLUniqueID } = req.params;
   // Destructure all editable fields from the request body
-  const {
+  let {
     FootageSrNo, LogSerialNo, fkDigitalRecordingCode, ContentFrom, ContentTo, TimeOfDay,
-    fkOccasion, EditingStatus, FootageType, VideoDistribution, Detail, SubDetail,
+    fkOccasion, EditingStatus, FootageType, VideoDistribution, Detail, SubDetail, DetailSub,
     CounterFrom, CounterTo, SubDuration, TotalDuration, Language, SpeakerSinger, fkOrganization,
     Designation, fkCountry, fkState, fkCity, Venue, fkGranth, Number, Topic, SeriesName,
     SatsangStart, SatsangEnd, IsAudioRecorded, AudioMP3Distribution, AudioWAVDistribution,
@@ -3589,6 +3638,17 @@ app.put('/api/newmedialog/:MLUniqueID', authenticateToken, async (req, res) => {
     EditingType, BhajanType, IsDubbed, NumberSource, TopicSource, Synopsis, LocationWithinAshram,
     Keywords, Grading, TopicGivenBy, LastModifiedBy
   } = req.body;
+
+if (DetailSub && typeof DetailSub === 'string') {
+    const separatorIndex = DetailSub.indexOf(' - ');
+    if (separatorIndex !== -1) {
+      Detail = DetailSub.substring(0, separatorIndex).trim();
+      SubDetail = DetailSub.substring(separatorIndex + 3).trim();
+    } else {
+      Detail = DetailSub.trim();
+      SubDetail = '';
+    }
+  }
 
   // FIX: Manually access keys with spaces
   const SegmentCategory = req.body['Segment Category'];
