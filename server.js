@@ -10871,17 +10871,18 @@ app.get('/api/check-ml-reference', authenticateToken, async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
     
-    // Extract MLID from query parameters
-    const { MLUniqueID } = req.query;
+    // Extract EventRefMLID from query parameters
+    const { EventRefMLID, MLUniqueID } = req.query;
+    const searchId = EventRefMLID || MLUniqueID;
 
     // Base WHERE clause
     let whereClause = "1=1";
     const params = [];
 
-    // Filter by MLID if provided (Partial match allowed for flexibility, or change to = for exact)
-    if (MLUniqueID && MLUniqueID.trim() !== '') {
-      whereClause += " AND nml.MLUniqueID LIKE ?";
-      params.push(`%${MLUniqueID.trim()}%`);
+    // Filter by EventRefMLID if provided (Partial match allowed for flexibility, or change to = for exact)
+    if (searchId && searchId.trim() !== '') {
+      whereClause += " AND nml.EventRefMLID LIKE ?";
+      params.push(`%${searchId.trim()}%`);
     } else {
       // If no search term, return empty result or limit to 0 to prevent loading all data
       whereClause += " AND 1=0"; 
