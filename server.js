@@ -1855,7 +1855,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
 
     const searchFields = [
       'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
-      'EventName','EventCode','RecordingName','RecordingCode','ProducctionBucket',
+      'EventName','EventCode','RecordingName','RecordingCode','ProductionBucket',
     ];
 
     const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(req.query, searchFields, filterableColumns, aliases);
@@ -2889,6 +2889,8 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
 });
 
 
+
+
 // --- EXPORT for Satsang Category ---
 app.get('/api/newmedialog/satsang-category/export', async (req, res) => {
   try {
@@ -3347,6 +3349,376 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
     });
   } catch (err) {
     console.error("❌ API Error for /api/newmedialog/satsang-dashboard:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ─── SRT Submission – Satsang Category ───────────────────────────────────────
+app.get('/api/newmedialog/srt-satsang-category', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    function toSqlDate(str) {
+      if (!str) return null;
+      const [d, m, y] = str.split('.');
+      if (!d || !m || !y) return null;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    let filters = { ...req.query };
+
+    const rawCountry = filters.fkCountry;
+    const rawState   = filters.fkState;
+    const rawCity    = filters.fkCity;
+    delete filters.fkCountry;
+    delete filters.fkState;
+    delete filters.fkCity;
+
+    const normalizeList = (val) => {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      return val.split(',').map(s => s.trim()).filter(Boolean);
+    };
+
+    const countryVals = normalizeList(rawCountry);
+    const stateVals   = normalizeList(rawState);
+    const cityVals    = normalizeList(rawCity);
+
+    let dateWhere = '';
+    const dateParams = [];
+    const from = toSqlDate(filters.ContentFrom);
+    const to   = toSqlDate(filters.ContentTo);
+    if (from && to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ? AND STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(from, to);
+      delete filters.ContentFrom; delete filters.ContentTo;
+    } else if (from) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") >= ?';
+      dateParams.push(from);
+      delete filters.ContentFrom;
+    } else if (to) {
+      dateWhere = 'STR_TO_DATE(nml.ContentFrom, "%d.%m.%Y") <= ?';
+      dateParams.push(to);
+      delete filters.ContentTo;
+    }
+
+    const filterableColumns = [
+      'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
+      'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
+      'CounterFrom', 'CounterTo', 'SubDuration', 'TotalDuration', 'Language', 'SpeakerSinger', 'fkOrganization',
+      'Designation', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname', 'fkCity', 'fkState', 'fkCountry',
+      'SatsangStart', 'SatsangEnd', 'IsAudioRecorded', 'AudioMP3Distribution', 'AudioWAVDistribution',
+      'AudioMP3DRCode', 'AudioWAVDRCode', 'Remarks', 'IsStartPage', 'EndPage', 'IsInformal', 'IsPPGNotPresent',
+      'Guidance', 'DiskMasterDuration', 'EventRefRemarksCounters', 'EventRefMLID', 'EventRefMLID2',
+      'DubbedLanguage', 'DubbingArtist', 'HasSubtitle', 'SubTitlesLanguage', 'EditingDeptRemarks', 'EditingType',
+      'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
+      'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
+      'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode', 'ProductionBucket'
+    ];
+
+    const aliases = {
+      IsInformal: 'nml', IsAudioRecorded: 'nml', LastModifiedTimestamp: 'nml', LastModifiedBy: 'nml',
+      PreservationStatus: 'dr', RecordingCode: 'dr', RecordingName: 'dr', fkEventCode: 'dr',
+      Masterquality: 'dr', DistributionDriveLink: 'dr', ProductionBucket: 'dr',
+      EventName: 'e', EventCode: 'e', Yr: 'e', NewEventCategory: 'e'
+    };
+
+    const searchFields = [
+      'MLUniqueID', 'Detail', 'SubDetail', 'Topic', 'SpeakerSinger',
+      'RecordingName', 'EventName', 'EventCode', 'RecordingCode', 'ProductionBucket', 'DistributionDriveLink'
+    ];
+
+    const { whereString: dynamicWhere, params: dynamicParams } = buildWhereClause(filters, searchFields, filterableColumns, aliases);
+
+    let locationWhere = '';
+    const locationParams = [];
+    const orConditions = [];
+    if (cityVals.length > 0) { orConditions.push(`nml.fkCity IN (?)`); locationParams.push(cityVals); }
+    if (countryVals.length > 0 && stateVals.length > 0) {
+      orConditions.push(`(nml.fkCountry IN (?) AND nml.fkState IN (?))`);
+      locationParams.push(countryVals, stateVals);
+    } else if (countryVals.length > 0) {
+      orConditions.push(`nml.fkCountry IN (?)`); locationParams.push(countryVals);
+    } else if (stateVals.length > 0) {
+      orConditions.push(`nml.fkState IN (?)`); locationParams.push(stateVals);
+    }
+    if (orConditions.length > 0) locationWhere = `(${orConditions.join(' OR ')})`;
+
+    let extraWhere = '';
+    const extraParams = [];
+    const displayValue = req.query.EventDisplay || req.query['EventName-EventCode'];
+    if (displayValue && String(displayValue).trim() !== '') {
+      const likeVal = `%${displayValue}%`;
+      extraWhere = `(\`e\`.\`EventName\` LIKE ? OR \`e\`.\`EventCode\` LIKE ? OR CONCAT(\`e\`.\`EventName\`, ' - ', \`e\`.\`EventCode\`) LIKE ?)`;
+      extraParams.push(likeVal, likeVal, likeVal);
+    }
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN (
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 
+        'Satsang', 'Informal Satsang', 'Pravachan','Product/Webseries',
+        'SU - Extracted', 'Satsang Clips','SU - Capsule'
+      )
+      AND (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+      )
+    `;
+
+    let whereParts = [];
+    if (dynamicWhere) whereParts.push(dynamicWhere.replace(/^WHERE\s+/i, ''));
+    if (dateWhere)    whereParts.push(dateWhere);
+    if (staticWhere)  whereParts.push(staticWhere);
+    if (extraWhere)   whereParts.push(extraWhere);
+    if (locationWhere) whereParts.push(locationWhere);
+    const finalWhere  = 'WHERE ' + whereParts.join(' AND ');
+    const finalParams = [...dynamicParams, ...dateParams, ...extraParams, ...locationParams];
+
+    const dateColumns    = ['ContentFrom', 'ContentTo', 'SatsangStart', 'SatsangEnd', 'LastModifiedTimestamp'];
+    const numericColumns = ['FootageSrNo', 'LogSerialNo', 'MLUniqueID'];
+    const orderByString  = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns)
+                           || 'ORDER BY nml.MLUniqueID DESC';
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
+      ${finalWhere}
+    `;
+    const [[{ total }]] = await db.query(countQuery, finalParams);
+    const totalPages = Math.ceil(total / limit);
+
+    const dataQuery = `
+      SELECT
+        nml.*,
+        (SELECT COUNT(*) FROM AuxFiles WHERE fkMLID = nml.MLUniqueID) AS relatedAuxFilesCount,
+        dr.Masterquality          AS Masterquality,
+        dr.DistributionDriveLink  AS DistributionDriveLink,
+        dr.ProductionBucket       AS ProductionBucket,
+        dr.RecordingName          AS RecordingName,
+        e.EventName,
+        e.EventCode,
+        e.Yr                      AS Yr,
+        e.NewEventCategory        AS NewEventCategory,
+        ec.EventCategory          AS EventCategoryName,
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub,
+        (CASE
+          WHEN nml.EventRefMLID IS NULL OR nml.EventRefMLID = ''
+            THEN NULL
+          ELSE CONCAT_WS(' - ',
+            NULLIF(nml.ContentFrom, ''),
+            NULLIF(nml.Detail, ''),
+            NULLIF(nml.fkCity, '')
+          )
+        END) AS ContentFromDetailCity
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      LEFT JOIN EventCategory AS ec ON e.NewEventCategory = ec.EventCategoryID
+      ${finalWhere}
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
+    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+
+    res.json({
+      data: rows,
+      pagination: { page, limit, totalItems: total, totalPages }
+    });
+  } catch (err) {
+    console.error("❌ API Error for /api/newmedialog/srt-satsang-category:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SRT: Related AuxFiles for a given MLUniqueID ────────────────────────────
+app.get('/api/srt-submission/related-auxfiles/:mlUniqueId', authenticateToken, async (req, res) => {
+  const { mlUniqueId } = req.params;
+  try {
+    const [results] = await db.query(
+      `SELECT SRTLink, AUXID, new_auxid, fkMLID, AuxCode, AuxFileType, AuxLanguage,
+              AuxTopic, NotesRemarks, GoogleDriveLink, ProjFileName,
+              CreatedBy, CreatedOn, ModifiedBy, ModifiedOn
+       FROM AuxFiles WHERE fkMLID = ? ORDER BY new_auxid ASC`,
+      [mlUniqueId]
+    );
+    res.json({ data: results });
+  } catch (err) {
+    console.error("❌ /api/srt-submission/related-auxfiles:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ─── SRT: Add a new Related AuxFile ──────────────────────────────────────────
+app.post('/api/srt-submission/related-auxfiles', authenticateToken, async (req, res) => {
+  const {
+    AUXID,
+    new_auxid,
+    fkMLID,
+    SRTLink,
+    AuxFileType
+  } = req.body;
+
+  // Get user from the authenticated token middleware
+  const userEmail = req.user.email;
+
+  // Basic validation
+  if (!new_auxid || !fkMLID || !SRTLink) {
+    return res.status(400).json({ error: "Missing required fields: new_auxid, fkMLID, SRTLink" });
+  }
+
+  try {
+    const query = `
+      INSERT INTO AuxFiles (
+        AUXID, new_auxid, fkMLID, SRTLink, AuxFileType, 
+        CreatedBy, CreatedOn, ModifiedBy, ModifiedOn
+      ) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, NOW())
+    `;
+
+    const params = [
+      AUXID || new_auxid, // Use new_auxid as fallback for AUXID if not provided
+      new_auxid,
+      fkMLID,
+      SRTLink,
+      AuxFileType, // Default to 'SRT' if not provided
+      userEmail, // CreatedBy
+      userEmail  // ModifiedBy
+    ];
+
+    const [result] = await db.query(query, params);
+
+    res.status(201).json({
+      message: "AuxFile created successfully.",
+      insertId: result.insertId
+    });
+
+  } catch (err) {
+    console.error("❌ DB Error on POST /api/srt-submission/related-auxfiles:", err);
+    res.status(500).json({ error: 'Database query failed', message: err.message, sqlMessage: err.sqlMessage });
+  }
+});
+
+
+// ─── SRT: Update an existing Related AuxFile ─────────────────────────────────
+app.put('/api/srt-submission/related-auxfiles/:new_auxid', authenticateToken, async (req, res) => {
+  const { new_auxid } = req.params;
+  const { SRTLink, ModifiedBy } = req.body;
+  const userEmail = ModifiedBy || req.user.email; // Use authenticated email
+
+  if (!SRTLink) {
+    return res.status(400).json({ error: "Missing required field: SRTLink" });
+  }
+
+  try {
+    const query = `
+      UPDATE AuxFiles 
+      SET SRTLink = ?, ModifiedBy = ?, ModifiedOn = NOW()
+      WHERE new_auxid = ?
+    `;
+
+    const [result] = await db.query(query, [SRTLink, userEmail, new_auxid]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "AuxFile not found." });
+    }
+
+    res.status(200).json({ message: "AuxFile updated successfully." });
+  } catch (err) {
+    console.error("❌ DB Error on PUT /api/srt-submission/related-auxfiles/:new_auxid:", err);
+    res.status(500).json({ error: 'Database query failed', message: err.message });
+  }
+});
+
+// ─── SRT Submission – Satsang Category Export ─────────────────────────────────
+app.get('/api/newmedialog/srt-satsang-category/export', authenticateToken, async (req, res) => {
+  try {
+    const filterableColumns = [
+      'MLUniqueID', 'FootageSrNo', 'LogSerialNo', 'fkDigitalRecordingCode', 'ContentFrom', 'ContentTo',
+      'TimeOfDay', 'fkOccasion', 'EditingStatus', 'FootageType', 'VideoDistribution', 'Detail', 'SubDetail',
+      'CounterFrom', 'CounterTo', 'SubDuration', 'TotalDuration', 'Language', 'SpeakerSinger', 'fkOrganization',
+      'Designation', 'fkCountry', 'fkState', 'fkCity', 'Venue', 'fkGranth', 'Number', 'Topic', 'Seriesname',
+      'SatsangStart', 'SatsangEnd', 'IsAudioRecorded', 'AudioMP3Distribution', 'AudioWAVDistribution',
+      'AudioMP3DRCode', 'AudioWAVDRCode', 'Remarks', 'IsStartPage', 'EndPage', 'IsInformal', 'IsPPGNotPresent',
+      'Guidance', 'DiskMasterDuration', 'EventRefRemarksCounters', 'EventRefMLID', 'EventRefMLID2',
+      'DubbedLanguage', 'DubbingArtist', 'HasSubtitle', 'SubTitlesLanguage', 'EditingDeptRemarks', 'EditingType',
+      'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
+      'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration',
+      'TopicgivenBy', 'EventName', 'EventCode', 'Yr', 'Masterquality', 'RecordingName'
+    ];
+    const aliases = {
+      IsInformal: 'nml', IsAudioRecorded: 'nml', LastModifiedTimestamp: 'nml', LastModifiedBy: 'nml',
+      Masterquality: 'dr', RecordingName: 'dr',
+      EventName: 'e', EventCode: 'e', Yr: 'e'
+    };
+    const { whereString, params } = buildWhereClause(req.query,
+      ['MLUniqueID', 'Topic', 'SpeakerSinger', 'EventName', 'EventCode'],
+      filterableColumns, aliases
+    );
+
+    const staticWhere = `
+      nml.\`Segment Category\` IN (
+        'Prasangik Udbodhan', 'SU', 'SU - GM', 'SU - Revision', 'SU - Extracted',
+        'Satsang', 'Informal Satsang', 'Pravachan'
+      )
+      AND (
+        dr.PreservationStatus IS NULL
+        OR TRIM(dr.PreservationStatus) = ''
+        OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+      )
+    `;
+    const combinedWhere = whereString
+      ? `${whereString} AND (${staticWhere})`
+      : `WHERE ${staticWhere}`;
+
+    const exportQuery = `
+      SELECT
+        nml.MLUniqueID, e.Yr, e.EventName, e.EventCode,
+        nml.Detail, nml.SubDetail, nml.Topic, nml.SubDuration,
+        nml.\`Segment Category\`, nml.FootageType, nml.Synopsis,
+        nml.EditingStatus, nml.Language, nml.Remarks,
+        nml.SatsangStart, nml.SatsangEnd,
+        dr.Masterquality, nml.ContentFrom, nml.fkCity,
+        nml.Number, nml.fkOccasion, nml.Keywords, nml.Guidance, nml.fkGranth,
+        nml.LastModifiedTimestamp, nml.LastModifiedBy
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${combinedWhere}
+      ORDER BY nml.MLUniqueID DESC
+    `;
+    const [results] = await db.query(exportQuery, params);
+    if (!results.length) return res.status(404).send('No records found for export.');
+
+    const headers = Object.keys(results[0]);
+    const csvHeader = headers.join(',');
+    const csvRows = results.map(row =>
+      headers.map(h => {
+        const v = row[h] === null || row[h] === undefined ? '' : String(row[h]);
+        return `"${v.replace(/"/g, '""')}"`;
+      }).join(',')
+    );
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="srt_satsang_category_export.csv"');
+    res.status(200).send([csvHeader, ...csvRows].join('\n'));
+  } catch (err) {
+    console.error("❌ API Error for /api/newmedialog/srt-satsang-category/export:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5067,6 +5439,37 @@ app.get('/api/newmedialog/country', async (req, res) => {
   } catch (err) {
     console.error("❌ Database query error on /api/newmedialog/country:", err);
     res.status(500).json({ error: 'Failed to fetch Country data.' });
+  }
+});
+
+// ─── MLUniqueID lookup for AUX ML dropdown (must be before /:mlid wildcard) ───
+app.get("/api/newmedialog/mlids", authenticateToken, async (req, res) => {
+  try {
+    const search = (req.query.search || "").trim();
+    const page  = parseInt(req.query.page)  || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+    const params = [];
+    let whereClause = "";
+    if (search) {
+      whereClause = "WHERE MLUniqueID LIKE ?";
+      params.push(`%${search}%`);
+    }
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(DISTINCT MLUniqueID) as total FROM NewMediaLog ${whereClause}`,
+      params
+    );
+    const [rows] = await db.query(
+      `SELECT DISTINCT MLUniqueID FROM NewMediaLog ${whereClause} ORDER BY MLUniqueID DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+    res.json({
+      data: rows.map((r) => r.MLUniqueID),
+      hasMore: offset + rows.length < total,
+    });
+  } catch (err) {
+    console.error("❌ MLIDs lookup error:", err);
+    res.status(500).json({ error: "Failed to fetch ML IDs." });
   }
 });
 
@@ -11716,9 +12119,256 @@ app.post('/api/user-column-preferences', authenticateToken, async (req, res) => 
     res.status(500).json({ error: "Google Sheets error saving preferences." });
   }
 });
+// ─── AUX ML Updations Status (Google Sheet) ───────────────────────────────────
+const AUX_ML_SHEET_ID = "1mi8V8-1ya7OK6LPGOTu_Z6VgSO0YLEHbgjWiJaX387U";
+const AUX_ML_SHEET_NAME = "Sheet1";
+const AUX_ML_CACHE_KEY = `sheet_data_${AUX_ML_SHEET_ID}`;
+
+function getServiceAccountCredentials() {
+  return {
+    type: process.env.SERVICE_ACCOUNT_TYPE,
+    project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+    private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+    private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+    client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+    auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+    token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+    auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+    client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+  };
+}
+
+app.get("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || "").trim().toLowerCase();
+
+    let allData = myCache.get(AUX_ML_CACHE_KEY);
+
+    if (!allData) {
+      const auth = new GoogleAuth({
+        credentials: getServiceAccountCredentials(),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      });
+      const client = await auth.getClient();
+      const googleSheets = google.sheets({ version: "v4", auth: client });
+
+      const response = await googleSheets.spreadsheets.values.get({
+        spreadsheetId: AUX_ML_SHEET_ID,
+        range: AUX_ML_SHEET_NAME,
+      });
+
+      const rows = response.data.values || [];
+      if (rows.length <= 1) {
+        return res.json({ data: [], pagination: { page, limit, totalItems: 0, totalPages: 0 } });
+      }
+
+      const headers = rows[0];
+      allData = rows.slice(1).map((row) => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ""; });
+        return obj;
+      });
+
+      myCache.set(AUX_ML_CACHE_KEY, allData);
+    }
+
+    const searchFields = ["MM Status", "Related ML", "Remarks", "Status Changed Timestamp"];
+    let filteredData = allData;
+
+    if (search) {
+      filteredData = allData.filter((row) =>
+        searchFields.some((key) => (row[key] || "").toString().toLowerCase().includes(search))
+      );
+    }
+
+    const totalItems = filteredData.length;
+    const totalPages = Math.ceil(totalItems / limit);
+    const paginatedData = filteredData.slice(offset, offset + limit);
+
+    res.json({ data: paginatedData, pagination: { page, limit, totalItems, totalPages } });
+  } catch (err) {
+    console.error("❌ AUX ML Status GET Error:", err);
+    res.status(500).json({ error: "Failed to fetch AUX ML Updations Status from Google Sheet." });
+  }
+});
+
+// GET AUX ML Status records for a specific MLUniqueID (Related ML field)
+app.get("/api/google-sheet/aux-ml-status/by-mlid/:mlid", authenticateToken, async (req, res) => {
+  try {
+    const mlid = (req.params.mlid || "").trim();
+    if (!mlid) return res.json({ data: [] });
+
+    let allData = myCache.get(AUX_ML_CACHE_KEY);
+    if (!allData) {
+      const auth = new GoogleAuth({
+        credentials: getServiceAccountCredentials(),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      });
+      const client = await auth.getClient();
+      const googleSheets = google.sheets({ version: "v4", auth: client });
+      const response = await googleSheets.spreadsheets.values.get({
+        spreadsheetId: AUX_ML_SHEET_ID,
+        range: AUX_ML_SHEET_NAME,
+      });
+      const rows = response.data.values || [];
+      if (rows.length <= 1) return res.json({ data: [] });
+      const headers = rows[0];
+      allData = rows.slice(1).map((row) => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ""; });
+        return obj;
+      });
+      myCache.set(AUX_ML_CACHE_KEY, allData);
+    }
+
+    const filtered = allData.filter(r => (r["Related ML"] || "").trim() === mlid);
+    res.json({ data: filtered });
+  } catch (err) {
+    console.error("❌ AUX ML by-mlid Error:", err);
+    res.status(500).json({ error: "Failed to fetch AUX ML records." });
+  }
+});
+
+app.post("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) => {
+  try {
+    const auth = new GoogleAuth({
+      credentials: getServiceAccountCredentials(),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+
+    const checkRes = await googleSheets.spreadsheets.values.get({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: AUX_ML_SHEET_NAME,
+    });
+
+    const rows = checkRes.data.values || [];
+    if (rows.length === 0) return res.status(500).json({ error: "Sheet is empty or missing headers." });
+
+    const headers = rows[0];
+    const body = req.body || {};
+    const timestamp = body["Status Changed Timestamp"] || new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+    const newRow = headers.map((h) => {
+      const header = (h || "").trim().toLowerCase();
+      if (header === "mm status") return body["MM Status"] || "";
+      if (header === "related ml") return body["Related ML"] || "";
+      if (header === "remarks") return body["Remarks"] || "";
+      if (header === "status changed timestamp") return timestamp;
+      return "";
+    });
+
+    await googleSheets.spreadsheets.values.append({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: AUX_ML_SHEET_NAME,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [newRow] },
+    });
+
+    myCache.del(AUX_ML_CACHE_KEY);
+    res.status(201).json({ message: "Record added successfully." });
+  } catch (err) {
+    console.error("❌ AUX ML Status POST Error:", err);
+    res.status(500).json({ error: "Failed to add record to Google Sheet.", details: err.message });
+  }
+});
+
+// PATCH /api/google-sheet/aux-ml-status — update Remarks and/or MM Status for an existing row
+// Identifies the row by matching "Related ML" (MLUniqueID). If multiple rows share the same
+// Related ML, the one whose current MM Status also matches is preferred; otherwise the last match is used.
+app.patch("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) => {
+  try {
+    const auth = new GoogleAuth({
+      credentials: getServiceAccountCredentials(),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+
+    // Fetch the full sheet to locate the row
+    const sheetRes = await googleSheets.spreadsheets.values.get({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: AUX_ML_SHEET_NAME,
+    });
+
+    const rows = sheetRes.data.values || [];
+    if (rows.length <= 1) {
+      return res.status(404).json({ error: "No data rows found in sheet." });
+    }
+
+    const headers = rows[0];
+    const body = req.body || {};
+    const relatedML = (body["Related ML"] || "").trim();
+
+    if (!relatedML) {
+      return res.status(400).json({ error: "'Related ML' is required to identify the row." });
+    }
+
+    // Find column indices
+    const relMLColIndex  = headers.findIndex(h => (h || "").trim().toLowerCase() === "related ml");
+    const mmStatusColIndex = headers.findIndex(h => (h || "").trim().toLowerCase() === "mm status");
+
+    if (relMLColIndex === -1) {
+      return res.status(500).json({ error: "Sheet is missing 'Related ML' column." });
+    }
+
+    const originalMmStatus = (body["MM Status"] || "").trim();
+
+    // Match by Related ML; prefer the row whose MM Status also matches (handles duplicates)
+    let matchIndex = -1;
+    for (let i = 1; i < rows.length; i++) {
+      if ((rows[i][relMLColIndex] || "").trim() === relatedML) {
+        matchIndex = i; // keep updating so we end up with the last match
+        // Exact match on both fields — stop here
+        if (mmStatusColIndex !== -1 && (rows[i][mmStatusColIndex] || "").trim() === originalMmStatus) {
+          break;
+        }
+      }
+    }
+
+    if (matchIndex === -1) {
+      return res.status(404).json({ error: "Record not found. Related ML did not match any row." });
+    }
+
+    const existingRow = rows[matchIndex];
+    const newTimestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+    // Build the updated row — only overwrite MM Status, Remarks, and timestamp
+    const updatedRow = headers.map((h, index) => {
+      const header = (h || "").trim().toLowerCase();
+      if (header === "mm status")                 return body["MM Status"] !== undefined ? body["MM Status"] : (existingRow[index] || "");
+      if (header === "remarks")                   return body["Remarks"]   !== undefined ? body["Remarks"]   : (existingRow[index] || "");
+      if (header === "status changed timestamp")  return newTimestamp;
+      return existingRow[index] !== undefined ? existingRow[index] : "";
+    });
+
+    // Sheet rows are 1-based; header = row 1, first data row = row 2 → sheet row = matchIndex + 1
+    const sheetRowNumber = matchIndex + 1;
+    const updateRange = `${AUX_ML_SHEET_NAME}!A${sheetRowNumber}`;
+
+    await googleSheets.spreadsheets.values.update({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: updateRange,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [updatedRow] },
+    });
+
+    myCache.del(AUX_ML_CACHE_KEY);
+    res.status(200).json({ message: "Record updated successfully." });
+  } catch (err) {
+    console.error("❌ AUX ML Status PATCH Error:", err);
+    res.status(500).json({ error: "Failed to update record in Google Sheet.", details: err.message });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 3600;
 app.listen(PORT, () => {
- 
+
   console.log(`🚀 Server running on port ${PORT}`);
 });
