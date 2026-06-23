@@ -12366,6 +12366,112 @@ app.patch("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res)
   }
 });
 
+// --- Search ML by DR Code ---
+app.get('/api/search-ml-by-dr-code', authenticateToken, async (req, res) => {
+  try {
+    const drCode = req.query.drCode;
+    if (!drCode) {
+      return res.status(400).json({ error: 'drCode query parameter is required' });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const filterableColumns = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization',
+      'Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname',
+      'SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent',
+      'Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2',
+      'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType',
+      'BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','LocationWithinAshram','Keywords','Grading','Segment Category','Segment Duration',
+      'TopicGivenBy','EventName','EventCode','Yr',
+      'RecordingName','RecordingCode','PreservationStatus','Masterquality','ProductionBucket','DistributionDriveLink'
+    ];
+
+    const aliases = {
+      EventName: 'e', EventCode: 'e', Yr: 'e',
+      RecordingName: 'dr', RecordingCode: 'dr', PreservationStatus: 'dr',
+      DistributionDriveLink: 'dr', ProductionBucket: 'dr', Masterquality: 'dr',
+      LastModifiedTimestamp: 'nml', IsInformal: 'nml', IsAudioRecorded: 'nml', LastModifiedBy: 'nml'
+    };
+
+    const searchFields = [
+      'MLUniqueID','FootageSrNo','LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo',
+      'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Detail','SubDetail',
+      'CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger',
+      'fkCity','fkGranth','Number','Topic','SatsangStart','SatsangEnd',
+      'AudioMP3DRCode','AudioWAVDRCode','Remarks','IsInformal','LastModifiedTimestamp','LastModifiedBy',
+      'Synopsis','Keywords','Grading','EventRefMLID','EventName','EventCode','Yr',
+      'RecordingName','Masterquality','ProductionBucket'
+    ];
+
+    // Strip drCode from query before passing to buildWhereClause so it isn't double-applied
+    const { drCode: _ignored, page: _p, limit: _l, sortBy: _s, sortDirection: _sd, ...restQuery } = req.query;
+
+    const { whereString, params } = buildWhereClause(restQuery, searchFields, filterableColumns, aliases);
+
+    // Inject the mandatory drCode filter
+    const drWhereString = whereString.startsWith('WHERE')
+      ? `${whereString} AND nml.fkDigitalRecordingCode = ?`
+      : `WHERE nml.fkDigitalRecordingCode = ?`;
+    const drParams = [...params, drCode];
+
+    const orderByString = buildOrderByClause(req.query, filterableColumns, aliases) || 'ORDER BY nml.MLUniqueID ASC';
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${drWhereString}
+    `;
+    const [[{ total }]] = await db.query(countQuery, drParams);
+    const totalPages = Math.ceil(total / limit);
+
+    const dataQuery = `
+      SELECT
+        nml.*,
+        dr.RecordingName        AS RecordingName,
+        dr.Masterquality        AS Masterquality,
+        dr.DistributionDriveLink AS DistributionDriveLink,
+        dr.ProductionBucket     AS ProductionBucket,
+        e.EventName             AS EventName,
+        e.EventCode             AS EventCode,
+        e.Yr                    AS Yr,
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      ${drWhereString}
+      ${orderByString}
+      LIMIT ? OFFSET ?
+    `;
+    const [results] = await db.query(dataQuery, [...drParams, limit, offset]);
+
+    res.json({
+      data: results,
+      pagination: { page, limit, totalItems: total, totalPages }
+    });
+  } catch (err) {
+    console.error('❌ Database query error on /search-ml-by-dr-code:', err);
+    res.status(500).json({ error: 'Database query failed' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 3600;
 app.listen(PORT, () => {
