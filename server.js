@@ -369,12 +369,29 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {})
 
   const orderByParts = sortFields.map((field, index) => {
     if (!allowedColumns.includes(field)) return null;
-    
+
     const direction = (sortDirections[index] || sortDirections[0] || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+
+    if (field === 'EventDisplay' || field === 'EventName - EventCode' || field === 'EventName-EventCode') {
+      const enAlias = tableAliases['EventName'];
+      const ecAlias = tableAliases['EventCode'];
+      const en = enAlias ? `${db.escapeId(enAlias)}.${db.escapeId('EventName')}` : db.escapeId('EventName');
+      const ec = ecAlias ? `${db.escapeId(ecAlias)}.${db.escapeId('EventCode')}` : db.escapeId('EventCode');
+      return `CONCAT(COALESCE(${en},''), CASE WHEN COALESCE(${en},'')<>'' AND COALESCE(${ec},'')<>'' THEN ' - ' ELSE '' END, COALESCE(${ec},'')) ${direction}`;
+    }
+
+    if (field === 'DetailSub' || field === 'Detail - SubDetail' || field === 'Detail-SubDetail') {
+      const dAlias = tableAliases['Detail'];
+      const sAlias = tableAliases['SubDetail'];
+      const d = dAlias ? `${db.escapeId(dAlias)}.${db.escapeId('Detail')}` : db.escapeId('Detail');
+      const s = sAlias ? `${db.escapeId(sAlias)}.${db.escapeId('SubDetail')}` : db.escapeId('SubDetail');
+      return `CONCAT(COALESCE(${d},''), CASE WHEN COALESCE(${d},'')<>'' AND COALESCE(${s},'')<>'' THEN ' - ' ELSE '' END, COALESCE(${s},'')) ${direction}`;
+    }
+
     const alias = tableAliases[field];
     const prefixedField = alias ? `${db.escapeId(alias)}.${db.escapeId(field)}` : db.escapeId(field);
 
-    // PERFORMANCE FIX: 
+    // PERFORMANCE FIX:
     // Removed regex sorting. It kills performance on large datasets.
     // If you need natural sort, store a "sort_order" integer column in DB.
     return `${prefixedField} ${direction}`;
@@ -11282,10 +11299,10 @@ app.get('/api/check-ml-reference', authenticateToken, async (req, res) => {
     let whereClause = "1=1";
     const params = [];
 
-    // Filter by EventRefMLID if provided (Partial match allowed for flexibility, or change to = for exact)
+    // Filter by EventRefMLID - exact match (TRIM handles trailing spaces in stored values)
     if (searchId && searchId.trim() !== '') {
-      whereClause += " AND nml.EventRefMLID LIKE ?";
-      params.push(`%${searchId.trim()}%`);
+      whereClause += " AND TRIM(nml.EventRefMLID) = ?";
+      params.push(searchId.trim());
     } else {
       // If no search term, return empty result or limit to 0 to prevent loading all data
       whereClause += " AND 1=0"; 
@@ -11606,18 +11623,16 @@ app.get('/api/search-details-global', authenticateToken, async (req, res) => {
     let whereClause = "1=1";
     const params = [];
 
-    // Search logic across your specific fields
+    // Exact match on only these 4 columns (TRIM handles trailing spaces in stored values)
     if (search && search.trim() !== '') {
-      const s = `%${search.trim()}%`;
+      const s = search.trim();
       whereClause += ` AND (
-        nml.Detail LIKE ? OR
-        nml.SubDetail LIKE ? OR
-        nml.Remarks LIKE ? OR
-        nml.SpeakerSinger LIKE ? OR
-        nml.fkOrganization LIKE ?
+        TRIM(nml.Detail) = ? OR
+        TRIM(nml.Remarks) = ? OR
+        TRIM(nml.fkOrganization) = ? OR
+        TRIM(nml.SpeakerSinger) = ?
       )`;
-      // Push the search term exactly 5 times to match the 5 '?' above
-      params.push(s, s, s, s, s);
+      params.push(s, s, s, s);
     } else {
       // If empty search, don't return data (optional, or remove to show all)
       whereClause += " AND 1=0"; 
@@ -11758,6 +11773,147 @@ app.get('/api/search-details-global', authenticateToken, async (req, res) => {
 
   } catch (err) {
     console.error("❌ Database query error on /api/search-details-global:", err);
+    res.status(500).json({ error: 'Database query failed', details: err.message });
+  }
+});
+
+// --- ENDPOINT: Extensive Media Search (LIKE across Detail, Topic, SpeakerSinger, fkOrganization, Remarks) ---
+app.get('/api/search-extensive', authenticateToken, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const { search } = req.query;
+
+    let whereClause = "1=1";
+    const params = [];
+
+    if (search && search.trim() !== '') {
+      const s = `%${search.trim()}%`;
+      whereClause += ` AND (
+        nml.Detail LIKE ? OR
+        nml.Topic LIKE ? OR
+        nml.SpeakerSinger LIKE ? OR
+        nml.fkOrganization LIKE ? OR
+        nml.Remarks LIKE ?
+      )`;
+      params.push(s, s, s, s, s);
+    } else {
+      whereClause += " AND 1=0";
+    }
+
+    const dataParams = [...params, limit, offset];
+
+    const dataQuery = `
+      SELECT
+        nml.MLUniqueID,
+        nml.FootageSrNo,
+        nml.LogSerialNo,
+        nml.fkDigitalRecordingCode,
+        nml.ContentFrom,
+        nml.ContentTo,
+        nml.Detail,
+        nml.SubDetail,
+        nml.EditingStatus,
+        nml.FootageType,
+        nml.fkOccasion,
+        nml.TimeOfDay,
+        nml.VideoDistribution,
+        nml.\`Segment Category\`,
+        nml.CounterFrom,
+        nml.CounterTo,
+        nml.SubDuration,
+        nml.TotalDuration,
+        nml.Language,
+        nml.SpeakerSinger,
+        nml.fkOrganization,
+        nml.Designation,
+        nml.fkCountry,
+        nml.fkState,
+        nml.fkCity,
+        nml.Venue,
+        nml.LocationWithinAshram,
+        nml.fkGranth,
+        nml.Number,
+        nml.Topic,
+        nml.SeriesName,
+        nml.SatsangStart,
+        nml.SatsangEnd,
+        nml.IsAudioRecorded,
+        nml.AudioMP3Distribution,
+        nml.AudioWAVDistribution,
+        nml.AudioMP3DRCode,
+        nml.AudioWAVDRCode,
+        nml.FullWAVDRCode,
+        nml.Remarks,
+        nml.IsStartPage,
+        nml.EndPage,
+        nml.IsInformal,
+        nml.IsPPGNotPresent,
+        nml.Guidance,
+        nml.DiskMasterDuration,
+        nml.EventRefRemarksCounters,
+        nml.EventRefMLID,
+        nml.EventRefMLID2,
+        nml.DubbedLanguage,
+        nml.DubbingArtist,
+        nml.HasSubtitle,
+        nml.SubTitlesLanguage,
+        nml.EditingDeptRemarks,
+        nml.EditingType,
+        nml.BhajanType,
+        nml.IsDubbed,
+        nml.NumberSource,
+        nml.TopicSource,
+        nml.LastModifiedTimestamp,
+        nml.LastModifiedBy,
+        nml.Synopsis,
+        nml.Keywords,
+        nml.Grading,
+        nml.TopicGivenBy,
+        dr.RecordingName,
+        dr.Masterquality,
+        dr.DistributionDriveLink,
+        dr.ProductionBucket,
+        e.Yr,
+        e.EventName,
+        e.EventCode,
+        e.NewEventCategory,
+        CONCAT(
+          COALESCE(e.EventName, ''),
+          CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(e.EventCode, '')
+        ) AS EventDisplay,
+        CONCAT(
+          COALESCE(nml.Detail, ''),
+          CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
+          COALESCE(nml.SubDetail, '')
+        ) AS DetailSub
+      FROM NewMediaLog AS nml
+      LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
+      LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
+      WHERE ${whereClause}
+      ORDER BY nml.MLUniqueID DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM NewMediaLog AS nml
+      WHERE ${whereClause}
+    `;
+
+    const [rows] = await db.query(dataQuery, dataParams);
+    const [[{ total }]] = await db.query(countQuery, params);
+
+    res.json({
+      data: rows,
+      pagination: { page, limit, totalItems: total, totalPages: Math.ceil(total / limit) }
+    });
+
+  } catch (err) {
+    console.error("❌ Database query error on /api/search-extensive:", err);
     res.status(500).json({ error: 'Database query failed', details: err.message });
   }
 });
@@ -12256,6 +12412,7 @@ app.post("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) 
 
     const newRow = headers.map((h) => {
       const header = (h || "").trim().toLowerCase();
+      if (header === "updation id") return body["Updation ID"] || "";
       if (header === "mm status") return body["MM Status"] || "";
       if (header === "related ml") return body["Related ML"] || "";
       if (header === "remarks") return body["Remarks"] || "";
