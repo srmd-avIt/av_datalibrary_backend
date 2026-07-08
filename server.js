@@ -12276,8 +12276,8 @@ app.post('/api/user-column-preferences', authenticateToken, async (req, res) => 
   }
 });
 // ─── AUX ML Updations Status (Google Sheet) ───────────────────────────────────
-const AUX_ML_SHEET_ID = "1mi8V8-1ya7OK6LPGOTu_Z6VgSO0YLEHbgjWiJaX387U";
-const AUX_ML_SHEET_NAME = "Sheet1";
+const AUX_ML_SHEET_ID = "1BCvuevP7k0Ul3Qc5VfgTstBnUA4t3N3rfvJu5zYJ8LU";
+const AUX_ML_SHEET_NAME = "ML Updation";
 const AUX_ML_CACHE_KEY = `sheet_data_${AUX_ML_SHEET_ID}`;
 
 function getServiceAccountCredentials() {
