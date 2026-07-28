@@ -11623,14 +11623,14 @@ app.get('/api/search-details-global', authenticateToken, async (req, res) => {
     let whereClause = "1=1";
     const params = [];
 
-    // Exact match on only these 4 columns (TRIM handles trailing spaces in stored values)
+    // Partial (contains) match on only these 4 columns
     if (search && search.trim() !== '') {
-      const s = search.trim();
+      const s = `%${search.trim()}%`;
       whereClause += ` AND (
-        TRIM(nml.Detail) = ? OR
-        TRIM(nml.Remarks) = ? OR
-        TRIM(nml.fkOrganization) = ? OR
-        TRIM(nml.SpeakerSinger) = ?
+        nml.Detail LIKE ? OR
+        nml.Remarks LIKE ? OR
+        nml.fkOrganization LIKE ? OR
+        nml.SpeakerSinger LIKE ?
       )`;
       params.push(s, s, s, s);
     } else {
