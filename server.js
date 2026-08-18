@@ -7,8 +7,15 @@ const { google } = require("googleapis");
 const { GoogleAuth } = require('google-auth-library');
 const nodemailer = require("nodemailer");
 const app = express();
+// This is a dynamic JSON API, not static content — auto ETags let the browser
+// serve a stale 304 for GETs whose response body happens to be byte-identical
+// to an earlier one, which masks real data changes behind a "nothing changed".
+app.set('etag', false);
 const NodeCache = require("node-cache");
-const myCache = new NodeCache({ stdTTL: 1 });
+// 1s was effectively no caching at all — every Google Sheets read hit the live
+// API again almost immediately, which was blowing past Sheets' 60-reads/min/user
+// quota under normal interactive use (typing, paginating, multiple tabs, etc.).
+const myCache = new NodeCache({ stdTTL: 30 });
 app.use(cors());
 
 // INCREASE LIMIT TO 500MB FOR MASSIVE EXPORTS
@@ -3575,7 +3582,37 @@ app.get('/api/srt-submission/related-auxfiles/:mlUniqueId', authenticateToken, a
        FROM AuxFiles WHERE fkMLID = ? ORDER BY new_auxid ASC`,
       [mlUniqueId]
     );
-    res.json({ data: results });
+
+    // The badge mirrors this ML's LIVE MM Status, not just whether a row exists
+    // in the DB — a DB write is permanent (there's no "unconfirm"), but MM
+    // Status can be reverted afterward, and old/legacy AuxFiles rows that
+    // predate this workflow shouldn't be stuck showing Done forever.
+    let status = "Pending";
+    try {
+      status = (await hasConfirmedMlUpdation(mlUniqueId)) ? "Confirmed" : "Pending";
+    } catch (mlErr) {
+      console.error("⚠️ Could not check ML Updation status for", mlUniqueId, mlErr?.response?.data?.error || mlErr.message || mlErr);
+    }
+
+    const confirmedRows = results.map((r) => ({ ...r, Status: status }));
+    const confirmedIds = new Set(confirmedRows.map((r) => r.new_auxid));
+
+    // Merge in entries still sitting in the "Aux SRT entry" sheet.
+    // Fails soft: if Sheets is unreachable, the DB rows still get returned.
+    let pendingRows = [];
+    try {
+      const googleSheets = await getAuxSrtEntrySheetsClient();
+      await ensureAuxSrtEntrySheet(googleSheets);
+      const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
+      pendingRows = rows
+        .map((row, i) => auxSrtEntryRowToObject(headers, row, i + 2))
+        .filter((r) => (r.fkMLID || "").trim() === mlUniqueId && !confirmedIds.has(r.new_auxid))
+        .map((r) => ({ ...r, AuxFileType: "SRT", Status: status }));
+    } catch (sheetErr) {
+      console.error("⚠️ Could not load pending Aux SRT entries from Google Sheet:", sheetErr?.response?.data?.error || sheetErr.message || sheetErr);
+    }
+
+    res.json({ data: [...confirmedRows, ...pendingRows] });
   } catch (err) {
     console.error("❌ /api/srt-submission/related-auxfiles:", err);
     res.status(500).json({ error: err.message });
@@ -3583,7 +3620,10 @@ app.get('/api/srt-submission/related-auxfiles/:mlUniqueId', authenticateToken, a
 });
 
 
-// ─── SRT: Add a new Related AuxFile ──────────────────────────────────────────
+// ─── SRT: Add a new Related AuxFile (direct-to-DB, legacy) ───────────────────
+// Superseded by POST /api/google-sheet/aux-srt-entry, which routes new/edited
+// AuxFile entries through the "Aux SRT entry" sheet for confirmation first.
+// Left in place in case anything else still depends on the direct-insert path.
 app.post('/api/srt-submission/related-auxfiles', authenticateToken, async (req, res) => {
   const {
     AUXID,
@@ -12295,6 +12335,39 @@ function getServiceAccountCredentials() {
   };
 }
 
+// Reads the "ML Updation" sheet (cached) and reports whether the given
+// MLUniqueID currently has ANY row with MM Status "Confirmed". DB writes to
+// AuxFiles are permanent (no "unconfirm"), but MM Status can be freely
+// reverted afterward — so the Related AuxFiles badge is driven by this live
+// check rather than by whether a row merely exists in the database.
+async function hasConfirmedMlUpdation(mlUniqueId) {
+  let allData = myCache.get(AUX_ML_CACHE_KEY);
+  if (!allData) {
+    const auth = new GoogleAuth({
+      credentials: getServiceAccountCredentials(),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: "v4", auth: client });
+    const response = await googleSheets.spreadsheets.values.get({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: AUX_ML_SHEET_NAME,
+    });
+    const rows = response.data.values || [];
+    if (rows.length <= 1) return false;
+    const headers = rows[0];
+    allData = rows.slice(1).map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ""; });
+      return obj;
+    });
+    myCache.set(AUX_ML_CACHE_KEY, allData);
+  }
+  return allData.some(
+    (r) => (r["Related ML"] || "").trim() === mlUniqueId && (r["MM Status"] || "").trim() === "Confirmed"
+  );
+}
+
 app.get("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -12410,6 +12483,20 @@ app.post("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) 
     const body = req.body || {};
     const timestamp = body["Status Changed Timestamp"] || new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
+    // If this record is being created as Confirmed, push any pending AuxFile
+    // entries to the database FIRST. If that fails, bail out without creating
+    // the record at all — MM Status should never say Confirmed if the DB write failed.
+    let auxFilesConfirmed = 0;
+    const isConfirming = (body["MM Status"] || "").trim() === "Confirmed";
+    if (isConfirming && body["Related ML"]) {
+      try {
+        auxFilesConfirmed = await confirmAuxSrtEntriesForMlid((body["Related ML"] || "").trim(), req.user.email);
+      } catch (auxErr) {
+        console.error("❌ Could not push pending Aux SRT entries to AuxFiles — record not created:", auxErr?.response?.data?.error || auxErr.message || auxErr);
+        return res.status(500).json({ error: "Failed to save AuxFile entries to the database. Record was not created.", details: auxErr.message });
+      }
+    }
+
     const newRow = headers.map((h) => {
       const header = (h || "").trim().toLowerCase();
       if (header === "updation id") return body["Updation ID"] || "";
@@ -12428,7 +12515,23 @@ app.post("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res) 
     });
 
     myCache.del(AUX_ML_CACHE_KEY);
-    res.status(201).json({ message: "Record added successfully." });
+
+    // If this new record wasn't itself Confirmed, re-check whether some OTHER
+    // entry for this ML already is before touching the sheet mirror — adding a
+    // non-Confirmed record shouldn't flip an already-Done ML back to Pending.
+    if (!isConfirming && body["Related ML"]) {
+      try {
+        const relatedMlValue = (body["Related ML"] || "").trim();
+        const stillConfirmed = await hasConfirmedMlUpdation(relatedMlValue);
+        const auxSheets = await getAuxSrtEntrySheetsClient();
+        await ensureAuxSrtEntrySheet(auxSheets);
+        await syncAuxSrtEntryStatusForMlid(auxSheets, relatedMlValue, stillConfirmed ? "Done" : "Pending");
+      } catch (syncErr) {
+        console.error("⚠️ Could not sync Aux SRT entry Status column:", syncErr?.response?.data?.error || syncErr.message || syncErr);
+      }
+    }
+
+    res.status(201).json({ message: "Record added successfully.", auxFilesConfirmed });
   } catch (err) {
     console.error("❌ AUX ML Status POST Error:", err);
     res.status(500).json({ error: "Failed to add record to Google Sheet.", details: err.message });
@@ -12495,6 +12598,20 @@ app.patch("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res)
     const existingRow = rows[matchIndex];
     const newTimestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
+    // If this update is marking the record Confirmed, push any pending AuxFile
+    // entries to the database FIRST. If that fails, bail out without touching
+    // MM Status at all — the sheet should never say Confirmed if the DB write failed.
+    let auxFilesConfirmed = 0;
+    const isConfirming = (body["MM Status"] || "").trim() === "Confirmed";
+    if (isConfirming) {
+      try {
+        auxFilesConfirmed = await confirmAuxSrtEntriesForMlid(relatedML, req.user.email);
+      } catch (auxErr) {
+        console.error("❌ Could not push pending Aux SRT entries to AuxFiles — MM Status not changed:", auxErr?.response?.data?.error || auxErr.message || auxErr);
+        return res.status(500).json({ error: "Failed to save AuxFile entries to the database. MM Status was not changed.", details: auxErr.message });
+      }
+    }
+
     // Build the updated row — only overwrite MM Status, Remarks, and timestamp
     const updatedRow = headers.map((h, index) => {
       const header = (h || "").trim().toLowerCase();
@@ -12516,12 +12633,307 @@ app.patch("/api/google-sheet/aux-ml-status", authenticateToken, async (req, res)
     });
 
     myCache.del(AUX_ML_CACHE_KEY);
-    res.status(200).json({ message: "Record updated successfully." });
+
+    // If this update wasn't itself a Confirm (confirmAuxSrtEntriesForMlid
+    // already synced "Done" for that case), re-check whether some OTHER entry
+    // for this ML is still Confirmed before touching the sheet mirror — e.g.
+    // editing Remarks on a non-Confirmed row shouldn't flip an already-Done ML
+    // back to Pending, and reverting the only Confirmed row should flip it back.
+    if (!isConfirming) {
+      try {
+        const stillConfirmed = await hasConfirmedMlUpdation(relatedML);
+        const auxSheets = await getAuxSrtEntrySheetsClient();
+        await ensureAuxSrtEntrySheet(auxSheets);
+        await syncAuxSrtEntryStatusForMlid(auxSheets, relatedML, stillConfirmed ? "Done" : "Pending");
+      } catch (syncErr) {
+        console.error("⚠️ Could not sync Aux SRT entry Status column:", syncErr?.response?.data?.error || syncErr.message || syncErr);
+      }
+    }
+
+    res.status(200).json({ message: "Record updated successfully.", auxFilesConfirmed });
   } catch (err) {
     console.error("❌ AUX ML Status PATCH Error:", err);
     res.status(500).json({ error: "Failed to update record in Google Sheet.", details: err.message });
   }
 });
+
+// ─── SRT: Related AuxFile entries via Google Sheet (pending review before DB) ──
+// New/edited AuxFile entries are written to the "Aux SRT entry" tab. They only
+// land in the AuxFiles table once someone hits Confirm — the DB row's existence
+// (matched by new_auxid) IS the "Confirmed" state, so there's no separate status
+// column to keep in sync.
+//
+// The sheet's real header row (as it already existed) is:
+//   AUXID | new_auxid | FKMLID | SRTLink | Remarks | CreatedOn | CreatedBy | ModifiedOn | ModifiedBy
+// Note FKMLID's casing and that there is no AuxFileType/Status column — AuxFileType
+// always defaults to "SRT" when it reaches the DB. Column lookups below are
+// case-insensitive and object keys are normalized via AUX_SRT_ENTRY_FIELD_ALIASES
+// so a header's exact casing on the live sheet never has to match a JS property
+// name by coincidence.
+const AUX_SRT_ENTRY_SHEET_NAME = "Aux SRT entry";
+const AUX_SRT_ENTRY_HEADERS = ["AUXID", "new_auxid", "FKMLID", "SRTLink", "Remarks", "CreatedOn", "CreatedBy", "ModifiedOn", "ModifiedBy", "Status"];
+const AUX_SRT_ENTRY_FIELD_ALIASES = {
+  auxid: "AUXID",
+  new_auxid: "new_auxid",
+  fkmlid: "fkMLID",
+  srtlink: "SRTLink",
+  remarks: "Remarks",
+  createdon: "CreatedOn",
+  createdby: "CreatedBy",
+  modifiedon: "ModifiedOn",
+  modifiedby: "ModifiedBy",
+  status: "Status",
+};
+const AUX_SRT_ENTRY_CACHE_KEY = `sheet_data_${AUX_ML_SHEET_ID}_aux_srt_entry`;
+let auxSrtEntrySheetEnsured = false;
+
+// 0-based column index -> A1 letter (0 -> A, 25 -> Z, 26 -> AA, ...).
+function columnIndexToLetter(index) {
+  let letter = "";
+  let n = index;
+  while (n >= 0) {
+    letter = String.fromCharCode((n % 26) + 65) + letter;
+    n = Math.floor(n / 26) - 1;
+  }
+  return letter;
+}
+
+async function getAuxSrtEntrySheetsClient() {
+  const auth = new GoogleAuth({
+    credentials: getServiceAccountCredentials(),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  const client = await auth.getClient();
+  return google.sheets({ version: "v4", auth: client });
+}
+
+// Creates the "Aux SRT entry" tab (with header row) if it doesn't exist yet, and
+// appends a "Status" column to it (mirroring the app's Pending/Done badge for
+// anyone viewing the sheet directly) if that tab already exists without one.
+async function ensureAuxSrtEntrySheet(googleSheets) {
+  if (auxSrtEntrySheetEnsured) return;
+  const meta = await googleSheets.spreadsheets.get({ spreadsheetId: AUX_ML_SHEET_ID });
+  const exists = (meta.data.sheets || []).some((s) => s.properties?.title === AUX_SRT_ENTRY_SHEET_NAME);
+  if (!exists) {
+    await googleSheets.spreadsheets.batchUpdate({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      resource: { requests: [{ addSheet: { properties: { title: AUX_SRT_ENTRY_SHEET_NAME } } }] },
+    });
+    await googleSheets.spreadsheets.values.update({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: `${AUX_SRT_ENTRY_SHEET_NAME}!A1`,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [AUX_SRT_ENTRY_HEADERS] },
+    });
+  } else {
+    const headerRes = await googleSheets.spreadsheets.values.get({
+      spreadsheetId: AUX_ML_SHEET_ID,
+      range: `${AUX_SRT_ENTRY_SHEET_NAME}!1:1`,
+    });
+    const existingHeaders = (headerRes.data.values && headerRes.data.values[0]) || [];
+    const hasStatusColumn = existingHeaders.some((h) => (h || "").trim().toLowerCase() === "status");
+    if (!hasStatusColumn) {
+      const colLetter = columnIndexToLetter(existingHeaders.length);
+      await googleSheets.spreadsheets.values.update({
+        spreadsheetId: AUX_ML_SHEET_ID,
+        range: `${AUX_SRT_ENTRY_SHEET_NAME}!${colLetter}1`,
+        valueInputOption: "USER_ENTERED",
+        resource: { values: [["Status"]] },
+      });
+      myCache.del(AUX_SRT_ENTRY_CACHE_KEY);
+    }
+  }
+  auxSrtEntrySheetEnsured = true;
+}
+
+// Writes `statusLabel` ("Pending" or "Done") into the Status column of every
+// "Aux SRT entry" row for the given ML — the sheet's mirror of the app's badge,
+// refreshed whenever an entry is added/edited or its ML's MM Status changes.
+async function syncAuxSrtEntryStatusForMlid(googleSheets, mlid, statusLabel) {
+  const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
+  const statusCol = headers.findIndex((h) => (h || "").trim().toLowerCase() === "status");
+  const fkCol = headers.findIndex((h) => (h || "").trim().toLowerCase() === "fkmlid");
+  if (statusCol === -1 || fkCol === -1) return;
+
+  const matchingRowNumbers = rows
+    .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
+    .filter(({ row }) => (row[fkCol] || "").trim() === mlid)
+    .map(({ sheetRowNumber }) => sheetRowNumber);
+
+  if (!matchingRowNumbers.length) return;
+
+  const colLetter = columnIndexToLetter(statusCol);
+  await googleSheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: AUX_ML_SHEET_ID,
+    resource: {
+      valueInputOption: "USER_ENTERED",
+      data: matchingRowNumbers.map((rowNum) => ({
+        range: `${AUX_SRT_ENTRY_SHEET_NAME}!${colLetter}${rowNum}`,
+        values: [[statusLabel]],
+      })),
+    },
+  });
+  myCache.del(AUX_SRT_ENTRY_CACHE_KEY);
+}
+
+// Returns { headers, rows } — headers exactly as present on the sheet, rows as raw arrays.
+async function fetchAuxSrtEntrySheetRows(googleSheets) {
+  const cached = myCache.get(AUX_SRT_ENTRY_CACHE_KEY);
+  if (cached) return cached;
+
+  const response = await googleSheets.spreadsheets.values.get({
+    spreadsheetId: AUX_ML_SHEET_ID,
+    range: AUX_SRT_ENTRY_SHEET_NAME,
+  });
+  const values = response.data.values || [];
+  const headers = values[0] && values[0].length ? values[0] : AUX_SRT_ENTRY_HEADERS;
+  const result = { headers, rows: values.slice(1) };
+  myCache.set(AUX_SRT_ENTRY_CACHE_KEY, result);
+  return result;
+}
+
+// Builds a row object keyed by normalized field names (see AUX_SRT_ENTRY_FIELD_ALIASES)
+// instead of the header's literal text, so casing differences on the live sheet
+// (e.g. "FKMLID" vs "fkMLID") can never desync reads from writes.
+function auxSrtEntryRowToObject(headers, row, sheetRowNumber) {
+  const obj = { __rowNumber: sheetRowNumber };
+  headers.forEach((h, i) => {
+    const norm = (h || "").trim().toLowerCase();
+    const key = AUX_SRT_ENTRY_FIELD_ALIASES[norm] || h;
+    obj[key] = row[i] !== undefined ? row[i] : "";
+  });
+  return obj;
+}
+
+// GET Aux SRT entries logged in the sheet for one ML record
+app.get("/api/google-sheet/aux-srt-entry/by-mlid/:mlid", authenticateToken, async (req, res) => {
+  try {
+    const mlid = (req.params.mlid || "").trim();
+    if (!mlid) return res.json({ data: [] });
+
+    const googleSheets = await getAuxSrtEntrySheetsClient();
+    await ensureAuxSrtEntrySheet(googleSheets);
+    const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
+
+    const filtered = rows
+      .map((row, i) => auxSrtEntryRowToObject(headers, row, i + 2))
+      .filter((r) => (r.fkMLID || "").trim() === mlid);
+
+    res.json({ data: filtered });
+  } catch (err) {
+    console.error("❌ Aux SRT entry by-mlid Error:", err);
+    res.status(500).json({ error: "Failed to fetch Aux SRT entries.", details: err.message });
+  }
+});
+
+// POST — Add or edit a Related AuxFile. Always lands in the "Aux SRT entry" sheet
+// (upserted by new_auxid); it only reaches the AuxFiles table once someone hits Confirm.
+app.post("/api/google-sheet/aux-srt-entry", authenticateToken, async (req, res) => {
+  try {
+    const { AUXID, new_auxid, fkMLID, SRTLink } = req.body || {};
+    if (!new_auxid || !fkMLID || !SRTLink) {
+      return res.status(400).json({ error: "Missing required fields: new_auxid, fkMLID, SRTLink" });
+    }
+    const userEmail = req.user.email;
+    const timestamp = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+    const googleSheets = await getAuxSrtEntrySheetsClient();
+    await ensureAuxSrtEntrySheet(googleSheets);
+    const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
+
+    const newAuxIdCol = headers.findIndex((h) => (h || "").trim().toLowerCase() === "new_auxid");
+    const matchIndex = newAuxIdCol === -1 ? -1 : rows.findIndex((r) => (r[newAuxIdCol] || "") === new_auxid);
+    const existing = matchIndex !== -1 ? auxSrtEntryRowToObject(headers, rows[matchIndex], matchIndex + 2) : null;
+
+    let isConfirmed = false;
+    try {
+      isConfirmed = await hasConfirmedMlUpdation(fkMLID);
+    } catch (mlErr) {
+      console.error("⚠️ Could not check ML Updation status for", fkMLID, mlErr?.response?.data?.error || mlErr.message || mlErr);
+    }
+    const statusLabel = isConfirmed ? "Done" : "Pending";
+
+    const newRow = headers.map((h) => {
+      const header = (h || "").trim().toLowerCase();
+      if (header === "auxid") return AUXID || new_auxid;
+      if (header === "new_auxid") return new_auxid;
+      if (header === "fkmlid") return fkMLID;
+      if (header === "srtlink") return SRTLink;
+      if (header === "createdby") return existing?.CreatedBy || userEmail;
+      if (header === "createdon") return existing?.CreatedOn || timestamp;
+      if (header === "modifiedby") return userEmail;
+      if (header === "modifiedon") return timestamp;
+      if (header === "status") return statusLabel;
+      const key = AUX_SRT_ENTRY_FIELD_ALIASES[header] || h;
+      return existing ? (existing[key] || "") : "";
+    });
+
+    if (existing) {
+      await googleSheets.spreadsheets.values.update({
+        spreadsheetId: AUX_ML_SHEET_ID,
+        range: `${AUX_SRT_ENTRY_SHEET_NAME}!A${existing.__rowNumber}`,
+        valueInputOption: "USER_ENTERED",
+        resource: { values: [newRow] },
+      });
+    } else {
+      await googleSheets.spreadsheets.values.append({
+        spreadsheetId: AUX_ML_SHEET_ID,
+        range: AUX_SRT_ENTRY_SHEET_NAME,
+        valueInputOption: "USER_ENTERED",
+        resource: { values: [newRow] },
+      });
+    }
+
+    myCache.del(AUX_SRT_ENTRY_CACHE_KEY);
+    res.status(200).json({
+      message: "Saved for confirmation.",
+      data: { AUXID: AUXID || new_auxid, new_auxid, fkMLID, SRTLink, AuxFileType: "SRT", Status: isConfirmed ? "Confirmed" : "Pending" },
+    });
+  } catch (err) {
+    console.error("❌ Aux SRT entry POST Error:", err);
+    res.status(500).json({ error: "Failed to save AuxFile entry to sheet.", details: err.message });
+  }
+});
+
+// Upserts every pending "Aux SRT entry" row for one ML record into the AuxFiles
+// table. Called when that ML's MM Status is marked Confirmed in the AUX ML
+// Updations Status view — that action is what pushes AuxFile entries to the DB.
+// Returns how many rows were pushed.
+async function confirmAuxSrtEntriesForMlid(mlid, userEmail) {
+  const googleSheets = await getAuxSrtEntrySheetsClient();
+  await ensureAuxSrtEntrySheet(googleSheets);
+  const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
+
+  const pending = rows
+    .map((row, i) => auxSrtEntryRowToObject(headers, row, i + 2))
+    .filter((r) => (r.fkMLID || "").trim() === mlid && r.new_auxid);
+
+  let confirmedCount = 0;
+  for (const row of pending) {
+    const [existingDbRows] = await db.query(`SELECT new_auxid FROM AuxFiles WHERE new_auxid = ?`, [row.new_auxid]);
+    if (existingDbRows.length > 0) {
+      await db.query(
+        `UPDATE AuxFiles SET AUXID = ?, fkMLID = ?, SRTLink = ?, ModifiedBy = ?, ModifiedOn = NOW() WHERE new_auxid = ?`,
+        [row.AUXID || row.new_auxid, row.fkMLID, row.SRTLink, userEmail, row.new_auxid]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO AuxFiles (AUXID, new_auxid, fkMLID, SRTLink, AuxFileType, CreatedBy, CreatedOn, ModifiedBy, ModifiedOn)
+         VALUES (?, ?, ?, ?, 'SRT', ?, NOW(), ?, NOW())`,
+        [row.AUXID || row.new_auxid, row.new_auxid, row.fkMLID, row.SRTLink, row.CreatedBy || userEmail, userEmail]
+      );
+    }
+    confirmedCount++;
+  }
+
+  try {
+    await syncAuxSrtEntryStatusForMlid(googleSheets, mlid, "Done");
+  } catch (syncErr) {
+    console.error("⚠️ Could not sync Aux SRT entry Status column:", syncErr?.response?.data?.error || syncErr.message || syncErr);
+  }
+
+  return confirmedCount;
+}
 
 // --- Search ML by DR Code ---
 app.get('/api/search-ml-by-dr-code', authenticateToken, async (req, res) => {
