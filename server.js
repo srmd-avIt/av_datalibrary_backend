@@ -3594,23 +3594,40 @@ app.get('/api/srt-submission/related-auxfiles/:mlUniqueId', authenticateToken, a
       console.error("⚠️ Could not check ML Updation status for", mlUniqueId, mlErr?.response?.data?.error || mlErr.message || mlErr);
     }
 
-    const confirmedRows = results.map((r) => ({ ...r, Status: status }));
-    const confirmedIds = new Set(confirmedRows.map((r) => r.new_auxid));
-
-    // Merge in entries still sitting in the "Aux SRT entry" sheet.
-    // Fails soft: if Sheets is unreachable, the DB rows still get returned.
-    let pendingRows = [];
+    // Pull matching "Aux SRT entry" sheet rows too. These reflect the LATEST
+    // requested add/edit for a new_auxid, which can be ahead of the DB row —
+    // e.g. editing an already-confirmed entry only updates the sheet until the
+    // next Confirm, so the sheet's data must win over a stale DB row for the
+    // same new_auxid, not just fill in brand-new ones.
+    const sheetRowsByAuxId = new Map();
     try {
       const googleSheets = await getAuxSrtEntrySheetsClient();
       await ensureAuxSrtEntrySheet(googleSheets);
       const { headers, rows } = await fetchAuxSrtEntrySheetRows(googleSheets);
-      pendingRows = rows
+      rows
         .map((row, i) => auxSrtEntryRowToObject(headers, row, i + 2))
-        .filter((r) => (r.fkMLID || "").trim() === mlUniqueId && !confirmedIds.has(r.new_auxid))
-        .map((r) => ({ ...r, AuxFileType: "SRT", Status: status }));
+        .filter((r) => (r.fkMLID || "").trim() === mlUniqueId && r.new_auxid)
+        .forEach((r) => sheetRowsByAuxId.set(r.new_auxid, r));
     } catch (sheetErr) {
-      console.error("⚠️ Could not load pending Aux SRT entries from Google Sheet:", sheetErr?.response?.data?.error || sheetErr.message || sheetErr);
+      console.error("⚠️ Could not load Aux SRT entries from Google Sheet:", sheetErr?.response?.data?.error || sheetErr.message || sheetErr);
     }
+
+    const dbIds = new Set(results.map((r) => r.new_auxid));
+
+    // DB rows, overlaid with any newer sheet edit for the same new_auxid.
+    const confirmedRows = results.map((r) => {
+      const sheetMatch = sheetRowsByAuxId.get(r.new_auxid);
+      return {
+        ...r,
+        ...(sheetMatch ? { AUXID: sheetMatch.AUXID || r.AUXID, SRTLink: sheetMatch.SRTLink || r.SRTLink } : {}),
+        Status: status,
+      };
+    });
+
+    // Sheet rows that have never reached the DB at all yet.
+    const pendingRows = Array.from(sheetRowsByAuxId.values())
+      .filter((r) => !dbIds.has(r.new_auxid))
+      .map((r) => ({ ...r, AuxFileType: "SRT", Status: status }));
 
     res.json({ data: [...confirmedRows, ...pendingRows] });
   } catch (err) {
