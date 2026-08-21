@@ -2,6 +2,7 @@
 
 const express = require('express');
 const cors = require("cors");
+const compression = require('compression');
 const db = require('./db'); // This now imports the mysql2 pool
 const { google } = require("googleapis");
 const { GoogleAuth } = require('google-auth-library');
@@ -11,11 +12,33 @@ const app = express();
 // serve a stale 304 for GETs whose response body happens to be byte-identical
 // to an earlier one, which masks real data changes behind a "nothing changed".
 app.set('etag', false);
+// gzip every response — JSON list payloads and CSV exports were going out
+// uncompressed, which matters a lot over slower connections.
+app.use(compression());
 const NodeCache = require("node-cache");
 // 1s was effectively no caching at all — every Google Sheets read hit the live
 // API again almost immediately, which was blowing past Sheets' 60-reads/min/user
 // quota under normal interactive use (typing, paginating, multiple tabs, etc.).
 const myCache = new NodeCache({ stdTTL: 30 });
+
+// Wraps a route handler whose payload rarely changes (dropdown/options lookups
+// that scan large tables) with an in-memory cache, so repeat requests skip the
+// DB/Sheets round trip entirely instead of re-running a full table scan.
+const withCache = (cacheKey, ttlSeconds, handler) => async (req, res) => {
+  const cached = myCache.get(cacheKey);
+  if (cached !== undefined) {
+    return res.status(200).json(cached);
+  }
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      myCache.set(cacheKey, body, ttlSeconds);
+    }
+    return originalJson(body);
+  };
+  return handler(req, res);
+};
+
 app.use(cors());
 
 // INCREASE LIMIT TO 500MB FOR MASSIVE EXPORTS
@@ -3806,47 +3829,57 @@ app.get("/api/google-sheet/ml-formal-pending",authenticateToken, async (req, res
     const offset = (page - 1) * limit;
     const search = req.query.search?.trim()?.toLowerCase() || "";
 
-    // 🟢 Create credentials object from .env variables
-    const credentials = {
-      type: process.env.SERVICE_ACCOUNT_TYPE,
-      project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
-      private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
-      private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
-      client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
-      auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
-      token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
-      auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
-      client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
-    };
-
-    const auth = new GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-
-    const client = await auth.getClient();
-    const googleSheets = google.sheets({ version: "v4", auth: client });
     const spreadsheetId = "16m_XfWuMPrX6mjuVvqLhzPbOzyTqvBapFXUDmFTXSV8";
+    const cacheKey = `sheet_data_${spreadsheetId}`;
 
-    const response = await googleSheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "Media Log(Cue Sheet)",
-    });
+    // Same cache-then-fetch pattern as /api/google-sheet/digital-recordings —
+    // this endpoint was re-fetching and re-parsing the whole sheet (a Sheets
+    // API round trip) on every single request, filters included.
+    let allData = myCache.get(cacheKey);
 
-    const rows = response.data.values;
-    if (!rows || rows.length <= 1) {
-      return res.status(404).json({ message: "No data found in Google Sheet." });
-    }
+    if (!allData) {
+      const credentials = {
+        type: process.env.SERVICE_ACCOUNT_TYPE,
+        project_id: process.env.SERVICE_ACCOUNT_PROJECT_ID,
+        private_key_id: process.env.SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+        private_key: process.env.SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        client_email: process.env.SERVICE_ACCOUNT_CLIENT_EMAIL,
+        client_id: process.env.SERVICE_ACCOUNT_CLIENT_ID,
+        auth_uri: process.env.SERVICE_ACCOUNT_AUTH_URI,
+        token_uri: process.env.SERVICE_ACCOUNT_TOKEN_URI,
+        auth_provider_x509_cert_url: process.env.SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL,
+        client_x509_cert_url: process.env.SERVICE_ACCOUNT_CLIENT_CERT_URL,
+      };
 
-    const headers = rows[0];
-    const allData = rows.slice(1).map((row) => {
-      const obj = {};
-      headers.forEach((h, i) => {
-        obj[h] = row[i] || "";
+      const auth = new GoogleAuth({
+        credentials,
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
       });
-      return obj;
-    });
+
+      const client = await auth.getClient();
+      const googleSheets = google.sheets({ version: "v4", auth: client });
+
+      const response = await googleSheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "Media Log(Cue Sheet)",
+      });
+
+      const rows = response.data.values;
+      if (!rows || rows.length <= 1) {
+        return res.status(404).json({ message: "No data found in Google Sheet." });
+      }
+
+      const headers = rows[0];
+      allData = rows.slice(1).map((row) => {
+        const obj = {};
+        headers.forEach((h, i) => {
+          obj[h] = row[i] || "";
+        });
+        return obj;
+      });
+
+      myCache.set(cacheKey, allData);
+    }
 
     const filterableColumns = [
       "Footage Sr. No.",
@@ -5570,7 +5603,7 @@ app.get('/api/newmedialog/:mlid', async (req, res) => {
 
 // --- NEW ENDPOINT FOR 'EventCode' DROPDOWN (From DigitalRecordings) ---
 // backend: /api/event-code/options
-app.get('/api/event-code/options', async (req, res) => {
+app.get('/api/event-code/options', withCache('opts:event-code', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT 
@@ -5589,7 +5622,7 @@ app.get('/api/event-code/options', async (req, res) => {
     console.error("❌ Database query error on /api/event-code/options:", err);
     res.status(500).json({ error: 'Failed to fetch Event Code options.' });
   }
-});
+}));
 // Get all Recording Codes from DigitalRecordings
 app.get('/api/recording-options', async (req, res) => {
   try {
@@ -6183,7 +6216,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 
 // --- NEW ENDPOINT FOR 'AudioList' DROPDOWN ---
-app.get('/api/audio/options', async (req, res) => {
+app.get('/api/audio/options', withCache('opts:audio', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT 
@@ -6198,7 +6231,7 @@ app.get('/api/audio/options', async (req, res) => {
     console.error("❌ Database query error on /api/audio/options:", err);
     res.status(500).json({ error: 'Failed to fetch audio list options.' });
   }
-});
+}));
 // --- Endpoint to fetch data from the "Audio" table ---
 app.get('/api/audio',authenticateToken, async (req, res) => {
   try {
@@ -6367,7 +6400,7 @@ app.post('/api/audio', authenticateToken, async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'BhajanName' DROPDOWN ---
-app.get('/api/bhajan-type/options', async (req, res) => {
+app.get('/api/bhajan-type/options', withCache('opts:bhajan-type', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct BhajanType strings from the NewMediaLog table.
     const query = `
@@ -6397,7 +6430,7 @@ app.get('/api/bhajan-type/options', async (req, res) => {
     console.error("❌ Database query error on /api/bhajan-type/options:", err);
     res.status(500).json({ error: 'Failed to fetch Bhajan Name options.' });
   }
-});
+}));
 
 app.get('/api/bhajan-type', authenticateToken, async (req, res) => {
   try {
@@ -6560,7 +6593,7 @@ app.post('/api/bhajan-type', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'fkDigitalMasterCategory' DROPDOWN ---
-app.get('/api/digital-master-category/options', async (req, res) => {
+app.get('/api/digital-master-category/options', withCache('opts:digital-master-category', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkDigitalMasterCategory strings from the DigitalRecordings table.
     const query = `
@@ -6590,7 +6623,7 @@ app.get('/api/digital-master-category/options', async (req, res) => {
     console.error("❌ Database query error on /api/digital-master-category/options:", err);
     res.status(500).json({ error: 'Failed to fetch digital master category options.' });
   }
-});
+}));
 
 app.get('/api/digital-master-category', authenticateToken, async (req, res) => {
   try {
@@ -6750,7 +6783,7 @@ app.post('/api/digital-master-category', authenticateToken, async (req, res) => 
   }
 });
 // --- NEW ENDPOINT FOR 'fkDistributionLabel' DROPDOWN ---
-app.get('/api/distribution-label/options', async (req, res) => {
+app.get('/api/distribution-label/options', withCache('opts:distribution-label', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkDistributionLabel strings from the DigitalRecordings table.
     const query = `
@@ -6780,7 +6813,7 @@ app.get('/api/distribution-label/options', async (req, res) => {
     console.error("❌ Database query error on /api/distribution-label/options:", err);
     res.status(500).json({ error: 'Failed to fetch distribution label options.' });
   }
-});
+}));
 
 app.get('/api/distribution-label', authenticateToken, async (req, res) => {
   try {
@@ -6941,7 +6974,7 @@ app.post('/api/distribution-label', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
-app.get('/api/editing-type/options', async (req, res) => {
+app.get('/api/editing-type/options', withCache('opts:editing-type', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct EditingType strings from the NewMediaLog table.
     const query = `
@@ -6971,7 +7004,7 @@ app.get('/api/editing-type/options', async (req, res) => {
     console.error("❌ Database query error on /api/editing-type/options:", err);
     res.status(500).json({ error: 'Failed to fetch Editing Type options.' });
   }
-});
+}));
 
 app.get('/api/editing-type', authenticateToken, async (req, res) => {
   try {
@@ -7139,7 +7172,7 @@ app.post('/api/editing-type', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'EdType' DROPDOWN ---
-app.get('/api/editing-status/options', async (req, res) => {
+app.get('/api/editing-status/options', withCache('opts:editing-status', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct EditingStatus strings from the NewMediaLog table.
     const query = `
@@ -7169,7 +7202,7 @@ app.get('/api/editing-status/options', async (req, res) => {
     console.error("❌ Database query error on /api/editing-status/options:", err);
     res.status(500).json({ error: 'Failed to fetch Editing Status options.' });
   }
-});
+}));
 
 app.get('/api/editing-status', authenticateToken, async (req, res) => {
   try {
@@ -7325,7 +7358,7 @@ app.post('/api/editing-status', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'Category' (EventCategory) DROPDOWN ---
-app.get('/api/event-category/options', async (req, res) => {
+app.get('/api/event-category/options', withCache('opts:event-category', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkEventCategory strings from the Events table.
     const query = `
@@ -7355,7 +7388,7 @@ app.get('/api/event-category/options', async (req, res) => {
     console.error("❌ Database query error on /api/event-category/options:", err);
     res.status(500).json({ error: 'Failed to fetch event category options.' });
   }
-});
+}));
 
 app.get('/api/event-category', authenticateToken, async (req, res) => {
   try {
@@ -7510,7 +7543,7 @@ app.post('/api/event-category', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'FootageType' DROPDOWN ---
-app.get('/api/footage-type/options', async (req, res) => {
+app.get('/api/footage-type/options', withCache('opts:footage-type', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct FootageType strings from the NewMediaLog table.
     const query = `
@@ -7540,7 +7573,7 @@ app.get('/api/footage-type/options', async (req, res) => {
     console.error("❌ Database query error on /api/footage-type/options:", err);
     res.status(500).json({ error: 'Failed to fetch footage type options.' });
   }
-});
+}));
 
 app.get('/api/footage-type', authenticateToken, async (req, res) => {
   try {
@@ -7629,7 +7662,7 @@ app.get('/api/footage-type/export', async (req, res) => {
 
 
 // --- NEW ENDPOINT FOR 'FormateType' DROPDOWN ---
-app.get('/api/format-type/options', async (req, res) => {
+app.get('/api/format-type/options', withCache('opts:format-type', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkMediaName strings from the DigitalRecordings table.
     const query = `
@@ -7659,7 +7692,7 @@ app.get('/api/format-type/options', async (req, res) => {
     console.error("❌ Database query error on /api/format-type/options:", err);
     res.status(500).json({ error: 'Failed to fetch format type options.' });
   }
-});
+}));
 
 app.put('/api/footage-type/:FootageID', authenticateToken, async (req, res) => {
   const { FootageID } = req.params;
@@ -7887,7 +7920,7 @@ app.post('/api/format-type', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'fkGranth' DROPDOWN ---
-app.get('/api/granths/options', async (req, res) => {
+app.get('/api/granths/options', withCache('opts:granths', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkGranth strings from the NewMediaLog table.
     const query = `
@@ -7917,7 +7950,7 @@ app.get('/api/granths/options', async (req, res) => {
     console.error("❌ Database query error on /api/granths/options:", err);
     res.status(500).json({ error: 'Failed to fetch granth options.' });
   }
-});
+}));
 
 app.get('/api/granths',authenticateToken, async (req, res) => {
   try {
@@ -8076,7 +8109,7 @@ app.post('/api/granths', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'Language' DROPDOWN ---
-app.get('/api/language/options', async (req, res) => {
+app.get('/api/language/options', withCache('opts:language', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct Language strings from the NewMediaLog table.
     const query = `
@@ -8106,7 +8139,7 @@ app.get('/api/language/options', async (req, res) => {
     console.error("❌ Database query error on /api/language/options:", err);
     res.status(500).json({ error: 'Failed to fetch language options.' });
   }
-});
+}));
 
 app.get('/api/language',authenticateToken, async (req, res) => {
   try {
@@ -8260,7 +8293,7 @@ app.post('/api/language', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'MQName' DROPDOWN ---
-app.get('/api/master-quality/options', async (req, res) => {
+app.get('/api/master-quality/options', withCache('opts:master-quality', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct Masterquality strings from the DigitalRecordings table.
     const query = `
@@ -8290,7 +8323,7 @@ app.get('/api/master-quality/options', async (req, res) => {
     console.error("❌ Database query error on /api/master-quality/options:", err);
     res.status(500).json({ error: 'Failed to fetch Master Quality options.' });
   }
-});
+}));
 
 app.get('/api/master-quality',authenticateToken, async (req, res) => {
   try {
@@ -8447,7 +8480,7 @@ app.post('/api/master-quality', authenticateToken, async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'Organization' DROPDOWN ---
-app.get('/api/organizations/options', async (req, res) => {
+app.get('/api/organizations/options', withCache('opts:organizations', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkOrganization strings from the NewMediaLog table.
     const query = `
@@ -8477,7 +8510,7 @@ app.get('/api/organizations/options', async (req, res) => {
     console.error("❌ Database query error on /api/organizations/options:", err);
     res.status(500).json({ error: 'Failed to fetch Organization options.' });
   }
-});
+}));
 
 app.get('/api/organizations',authenticateToken, async (req, res) => {
   try {
@@ -8635,7 +8668,7 @@ app.post('/api/organizations', authenticateToken, async (req, res) => {
 
 
 // --- NEW ENDPOINT FOR 'New Event Category' DROPDOWN ---
-app.get('/api/new-event-category/options', async (req, res) => {
+app.get('/api/new-event-category/options', withCache('opts:new-event-category', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct NewEventCategory strings from the Events table.
     const query = `
@@ -8665,7 +8698,7 @@ app.get('/api/new-event-category/options', async (req, res) => {
     console.error("❌ Database query error on /api/new-event-category/options:", err);
     res.status(500).json({ error: 'Failed to fetch new event categories for dropdown.' });
   }
-});
+}));
 
 app.get('/api/new-event-category', authenticateToken, async (req, res) => {
   try {
@@ -8822,7 +8855,7 @@ app.post('/api/new-event-category', authenticateToken, async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'fkCity' DROPDOWN ---
-app.get('/api/cities/options', async (req, res) => {
+app.get('/api/cities/options', withCache('opts:cities', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkCity strings from the NewMediaLog table.
     const query = `
@@ -8852,7 +8885,7 @@ app.get('/api/cities/options', async (req, res) => {
     console.error("❌ Database query error on /api/cities/options:", err);
     res.status(500).json({ error: 'Failed to fetch city options.' });
   }
-});
+}));
 
 app.get('/api/new-cities',authenticateToken, async (req, res) => {
   try {
@@ -9008,7 +9041,7 @@ app.post('/api/new-cities', authenticateToken, async (req, res) => {
 
 
 // --- NEW ENDPOINT FOR 'fkCountry' DROPDOWN ---
-app.get('/api/countries/options', async (req, res) => {
+app.get('/api/countries/options', withCache('opts:countries', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkCountry strings from the NewMediaLog table.
     const query = `
@@ -9038,7 +9071,7 @@ app.get('/api/countries/options', async (req, res) => {
     console.error("❌ Database query error on /api/countries/options:", err);
     res.status(500).json({ error: 'Failed to fetch country options.' });
   }
-});
+}));
 
 app.get('/api/new-countries', authenticateToken, async (req, res) => {
   try {
@@ -9192,7 +9225,7 @@ app.post('/api/new-countries', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'fkState' DROPDOWN ---
-app.get('/api/states/options', async (req, res) => {
+app.get('/api/states/options', withCache('opts:states', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkState strings from the NewMediaLog table.
     const query = `
@@ -9222,7 +9255,7 @@ app.get('/api/states/options', async (req, res) => {
     console.error("❌ Database query error on /api/states/options:", err);
     res.status(500).json({ error: 'Failed to fetch state options.' });
   }
-});
+}));
 
 app.get('/api/new-states',authenticateToken,async (req, res) => {
   try {
@@ -9377,7 +9410,7 @@ app.post('/api/new-states', authenticateToken, async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'fkOccasion' DROPDOWN ---
-app.get('/api/occasion/options', async (req, res) => {
+app.get('/api/occasion/options', withCache('opts:occasion', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct fkOccasion strings from the NewMediaLog table.
     const query = `
@@ -9407,7 +9440,7 @@ app.get('/api/occasion/options', async (req, res) => {
     console.error("❌ Database query error on /api/occasion/options:", err);
     res.status(500).json({ error: 'Failed to fetch occasion options.' });
   }
-});
+}));
 
 app.get('/api/occasions',authenticateToken, async (req, res) => {
   try {
@@ -9561,7 +9594,7 @@ app.post('/api/occasions', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'TopicSource' & 'NumberSource' DROPDOWN ---
-app.get('/api/number-source/options', async (req, res) => {
+app.get('/api/number-source/options', withCache('opts:number-source', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT NumberSource
@@ -9588,9 +9621,9 @@ app.get('/api/number-source/options', async (req, res) => {
     console.error("❌ Database query error on /api/number-source/options:", err);
     res.status(500).json({ error: 'Failed to fetch number source options.' });
   }
-});
+}));
 
-app.get('/api/number/options', async (req, res) => {
+app.get('/api/number/options', withCache('opts:number', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT Number
@@ -9624,9 +9657,9 @@ app.get('/api/number/options', async (req, res) => {
     console.error("❌ Database query error on /api/number/options:", err);
     res.status(500).json({ error: 'Failed to fetch number options.' });
   }
-});
+}));
 
-app.get('/api/topic-source/options', async (req, res) => {
+app.get('/api/topic-source/options', withCache('opts:topic-source', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT TopicSource
@@ -9653,7 +9686,7 @@ app.get('/api/topic-source/options', async (req, res) => {
     console.error("❌ Database query error on /api/topic-source/options:", err);
     res.status(500).json({ error: 'Failed to fetch topic source options.' });
   }
-});
+}));
 
 app.get('/api/topic-number-source',authenticateToken, async (req, res) => {
   try {
@@ -9856,7 +9889,7 @@ app.get('/api/topic-number-source/export', async (req, res) => {
 
 
 // --- NEW ENDPOINT FOR 'TimeList' DROPDOWN ---
-app.get('/api/time-of-day/options', async (req, res) => {
+app.get('/api/time-of-day/options', withCache('opts:time-of-day', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct TimeOfDay strings from the NewMediaLog table.
     const query = `
@@ -9886,7 +9919,7 @@ app.get('/api/time-of-day/options', async (req, res) => {
     console.error("❌ Database query error on /api/time-of-day/options:", err);
     res.status(500).json({ error: 'Failed to fetch Time of Day options.' });
   }
-});
+}));
 
 app.get('/api/time-of-day', authenticateToken, async (req, res) => {
   try {
@@ -10050,7 +10083,7 @@ app.post('/api/time-of-day', authenticateToken, async (req, res) => {
   }
 });
 // --- NEW ENDPOINT FOR 'AuxFileType' DROPDOWN ---
-app.get('/api/aux-file-type/options', async (req, res) => {
+app.get('/api/aux-file-type/options', withCache('opts:aux-file-type', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct AuxFileType strings from the AuxFiles table.
     const query = `
@@ -10080,7 +10113,7 @@ app.get('/api/aux-file-type/options', async (req, res) => {
     console.error("❌ Database query error on /api/aux-file-type/options:", err);
     res.status(500).json({ error: 'Failed to fetch Aux File Type options.' });
   }
-});
+}));
 
 
 app.get('/api/aux-file-type', authenticateToken, async (req, res) => {
@@ -10245,7 +10278,7 @@ app.post('/api/aux-file-type', authenticateToken, async (req, res) => {
 });
 
 // --- NEW ENDPOINT FOR 'Keywords' DROPDOWN ---
-app.get('/api/keywords/options', async (req, res) => {
+app.get('/api/keywords/options', withCache('opts:keywords', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct keyword strings from the database.
     const query = `
@@ -10279,10 +10312,10 @@ app.get('/api/keywords/options', async (req, res) => {
     console.error("❌ Database query error on /api/keywords/options:", err);
     res.status(500).json({ error: 'Failed to fetch Keywords options.' });
   }
-});
+}));
 
 
-app.get('/api/dimension/options', async (req, res) => {
+app.get('/api/dimension/options', withCache('opts:dimension', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct dimension strings from the database.
     const query = `
@@ -10315,9 +10348,9 @@ app.get('/api/dimension/options', async (req, res) => {
     console.error("❌ Database query error on /api/dimension/options:", err);
     res.status(500).json({ error: 'Failed to fetch Dimension options.' });
   }
-});
+}));
 
-app.get('/api/production-bucket/options', async (req, res) => {
+app.get('/api/production-bucket/options', withCache('opts:production-bucket', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct production bucket strings from the database.
     const query = `
@@ -10350,10 +10383,10 @@ app.get('/api/production-bucket/options', async (req, res) => {
     console.error("❌ Database query error on /api/production-bucket/options:", err);
     res.status(500).json({ error: 'Failed to fetch ProductionBucket options.' });
   }
-});
+}));
 
 // --- NEW ENDPOINT FOR 'PreservationStatus' DROPDOWN ---
-app.get('/api/preservation-status/options', async (req, res) => {
+app.get('/api/preservation-status/options', withCache('opts:preservation-status', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT PreservationStatus
@@ -10380,10 +10413,10 @@ app.get('/api/preservation-status/options', async (req, res) => {
     console.error("❌ Database query error on /api/preservation-status/options:", err);
     res.status(500).json({ error: 'Failed to fetch PreservationStatus options.' });
   }
-});
+}));
 
 // --- NEW ENDPOINT FOR 'Teams' DROPDOWN ---
-app.get('/api/teams/options', async (req, res) => {
+app.get('/api/teams/options', withCache('opts:teams', 300, async (req, res) => {
   try {
     const query = `
       SELECT DISTINCT Teams
@@ -10410,10 +10443,10 @@ app.get('/api/teams/options', async (req, res) => {
     console.error("❌ Database query error on /api/teams/options:", err);
     res.status(500).json({ error: 'Failed to fetch Teams options.' });
   }
-});
+}));
 
 
-app.get('/api/topic-given-by/options', async (req, res) => {
+app.get('/api/topic-given-by/options', withCache('opts:topic-given-by', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct TopicGivenBy strings from the database.
     const query = `
@@ -10445,7 +10478,7 @@ app.get('/api/topic-given-by/options', async (req, res) => {
     console.error("❌ Database query error on /api/topic-given-by/options:", err);
     res.status(500).json({ error: 'Failed to fetch Topic Given By options.' });
   }
-});
+}));
 
 app.get('/api/topic-given-by', async (req, res) => {
   try {
@@ -10605,7 +10638,7 @@ app.post('/api/topic-given-by', authenticateToken, async (req, res) => {
     });
   }
 });
-app.get('/api/segment-category/options', async (req, res) => {
+app.get('/api/segment-category/options', withCache('opts:segment-category', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct segment category strings from the database.
     const query = `
@@ -10638,7 +10671,7 @@ app.get('/api/segment-category/options', async (req, res) => {
     console.error("❌ Database query error on /api/segment-category/options:", err);
     res.status(500).json({ error: 'Failed to fetch Segment Category options.' });
   }
-});
+}));
 
 
 app.get('/api/segment-category', authenticateToken, async (req, res) => {
@@ -10797,7 +10830,7 @@ app.post('/api/segment-category', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/is-audio-recorded/options', async (req, res) => {
+app.get('/api/is-audio-recorded/options', withCache('opts:is-audio-recorded', 300, async (req, res) => {
   try {
     // 1. Fetch all non-empty, distinct IsAudioRecorded strings from the NewMediaLog table.
     const query = `
@@ -10827,7 +10860,7 @@ app.get('/api/is-audio-recorded/options', async (req, res) => {
     console.error("❌ Database query error on /api/is-audio-recorded/options:", err);
     res.status(500).json({ error: 'Failed to fetch IsAudioRecorded options.' });
   }
-});
+}));
 
 app.post('/api/manage-columns/add', async (req, res) => {
   const { tableName, columnKey } = req.body;
@@ -11348,17 +11381,17 @@ app.get('/api/check-ml-reference', authenticateToken, async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
     
-    // Extract EventRefMLID from query parameters
+    // Extract MLUniqueID from query parameters
     const { EventRefMLID, MLUniqueID } = req.query;
-    const searchId = EventRefMLID || MLUniqueID;
+    const searchId = MLUniqueID || EventRefMLID;
 
     // Base WHERE clause
     let whereClause = "1=1";
     const params = [];
 
-    // Filter by EventRefMLID - exact match (TRIM handles trailing spaces in stored values)
+    // Filter by MLUniqueID - exact match (TRIM handles trailing spaces in stored values)
     if (searchId && searchId.trim() !== '') {
-      whereClause += " AND TRIM(nml.EventRefMLID) = ?";
+      whereClause += " AND TRIM(nml.MLUniqueID) = ?";
       params.push(searchId.trim());
     } else {
       // If no search term, return empty result or limit to 0 to prevent loading all data
