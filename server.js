@@ -8734,6 +8734,30 @@ app.get('/api/new-event-category/options', withCache('opts:new-event-category', 
   }
 }));
 
+app.get('/api/years/options', withCache('opts:years', 300, async (req, res) => {
+  try {
+    const query = `
+      SELECT DISTINCT Yr
+      FROM Events
+      WHERE Yr IS NOT NULL AND TRIM(Yr) <> ''
+      ORDER BY CAST(Yr AS SIGNED) DESC
+    `;
+
+    const [rows] = await db.query(query);
+    const uniqueYears = [...new Set(
+      rows
+        .map(row => String(row.Yr).trim())
+        .filter(Boolean)
+        .filter(value => /^\d+$/.test(value))
+    )].sort((a, b) => Number(b) - Number(a));
+
+    res.status(200).json(uniqueYears.map(year => ({ Yr: year })));
+  } catch (err) {
+    console.error('❌ Database query error on /api/years/options:', err);
+    res.status(500).json({ error: 'Failed to fetch year options for dropdown.' });
+  }
+}));
+
 app.get('/api/new-event-category', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1; // Default to page 1
