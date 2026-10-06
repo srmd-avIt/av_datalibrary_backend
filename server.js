@@ -164,7 +164,7 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
     'contains': 'LIKE', 'not_contains': 'NOT LIKE', 'equals': '=', 'not_equals': '!=',
     'starts_with': 'LIKE', 'ends_with': 'LIKE', 'in': 'IN', 'not_in': 'NOT IN',
     'greater': '>', 'greater_equal': '>=', 'less': '<', 'less_equal': '<=',
-    'is_empty': 'IS_EMPTY', 'is_not_empty': 'IS_NOT_EMPTY', 'between': 'BETWEEN',
+    'is_empty': 'IS_EMPTY', 'is_not_empty': 'IS_NOT_EMPTY', 'between': 'BETWEEN', 'range': 'BETWEEN',
   };
 
   const { page, limit, sortBy, sortDirection, search, advanced_filters, ...filters } = queryParams;
@@ -205,6 +205,30 @@ const buildWhereClause = (queryParams, searchFields = [], allColumns = [], table
       return s.split(',').map(v => v.trim()).filter(Boolean);
     }
     return s;
+  };
+
+  const normalizeRangeValues = (rawValue) => {
+    if (Array.isArray(rawValue)) {
+      const values = rawValue.slice(0, 2).map(v => String(v ?? '').trim());
+      while (values.length < 2) values.push('');
+      return values;
+    }
+
+    if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+      const from = String(rawValue.from ?? rawValue.min ?? '').trim();
+      const to = String(rawValue.to ?? rawValue.max ?? '').trim();
+      return [from, to];
+    }
+
+    if (typeof rawValue === 'string') {
+      const parts = rawValue.split('|').map(v => String(v).trim());
+      if (parts.length >= 2) {
+        return [parts[0] ?? '', parts[1] ?? ''];
+      }
+      return [parts[0] ?? '', ''];
+    }
+
+    return ['', ''];
   };
 
   // --- 1. Global search ---
@@ -326,12 +350,22 @@ if (Array.isArray(norm) && norm.length > 0) {
             switch (dbOperator) {
               case 'IS_EMPTY': ruleClause = `(${dbField} IS NULL OR ${dbField} = '')`; break;
               case 'IS_NOT_EMPTY': ruleClause = `(${dbField} IS NOT NULL AND ${dbField} <> '')`; break;
-              case 'BETWEEN':
-                if (Array.isArray(rule.value) && rule.value.length === 2) {
-                  ruleParams.push(rule.value[0], rule.value[1]);
+              case 'BETWEEN': {
+                const rangeValues = normalizeRangeValues(rule.value);
+                const [fromVal = '', toVal = ''] = rangeValues;
+
+                if (fromVal !== '' && toVal !== '') {
+                  ruleParams.push(fromVal, toVal);
                   ruleClause = `${dbField} BETWEEN ? AND ?`;
+                } else if (fromVal !== '') {
+                  ruleParams.push(fromVal);
+                  ruleClause = `${dbField} >= ?`;
+                } else if (toVal !== '') {
+                  ruleParams.push(toVal);
+                  ruleClause = `${dbField} <= ?`;
                 }
                 break;
+              }
               case 'IN': case 'NOT IN':
                 const inValues = Array.isArray(rule.value) ? rule.value : [rule.value];
                 if (inValues.length > 0) {
