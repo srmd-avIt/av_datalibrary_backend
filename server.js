@@ -4558,6 +4558,13 @@ app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
       aliases
     );
 
+    const staticWhere = `(
+      dr.PreservationStatus IS NULL
+      OR TRIM(dr.PreservationStatus) = ''
+      OR UPPER(TRIM(dr.PreservationStatus)) = 'PRESERVE'
+    )`;
+    const finalWhere = whereString && whereString.trim() !== '' ? `${whereString} AND ${staticWhere}` : `WHERE ${staticWhere}`;
+
     const dateColumns = ['SubmittedDate', 'LastModifiedTimestamp', 'PresStatGuidDt'];
     const numericColumns = ['NoOfFiles', 'FilesizeInBytes', 'BitRate', 'AudioBitrate'];
     const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns);
@@ -4567,7 +4574,7 @@ app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
       SELECT COUNT(*) as total
       FROM DigitalRecordings dr
       LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${finalWhere}
     `;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
@@ -4612,7 +4619,7 @@ app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
         dr.Teams
       FROM DigitalRecordings dr
       LEFT JOIN Events e ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${finalWhere}
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
@@ -4638,7 +4645,13 @@ app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
 app.get('/api/digitalrecording/export', async (req, res) => {
     try {
         const { whereString, params } = buildWhereClause(req.query, ['fkEventCode', 'RecordingName'], ['fkEventCode', 'RecordingName', 'RecordingCode', 'NoOfFiles','fkDigitalMasterCategory','fkMediaName','BitRate','AudioBitrate','Filesize','Duration','AudioTotalDuration','RecordingRemarks','CounterError','ReasonError','QcRemarksCheckedOn','PreservationStatus','QcSevak','MasterProductTitle','Qcstatus','LastModifiedTimestamp','fkDistributionLabel','SubmittedDate','PresStatGuidDt','InfoOnCassette','Masterquality','IsInformal', 'FilesizeInBytes','AssociatedDR','Dimension','ProductionBucket','DistributionDriveLink','Teams']);
-        const dataQuery = `SELECT * FROM DigitalRecordings ${whereString}`;
+        const staticWhere = `(
+          PreservationStatus IS NULL
+          OR TRIM(PreservationStatus) = ''
+          OR UPPER(TRIM(PreservationStatus)) = 'PRESERVE'
+        )`;
+        const finalWhere = whereString && whereString.trim() !== '' ? `${whereString} AND ${staticWhere}` : `WHERE ${staticWhere}`;
+        const dataQuery = `SELECT * FROM DigitalRecordings ${finalWhere}`;
         const [results] = await db.query(dataQuery, params);
         if (results.length === 0) {
             return res.status(404).send("No data found to export for the given filters.");
