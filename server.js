@@ -464,6 +464,86 @@ const buildOrderByClause = (queryParams, allowedColumns = [], tableAliases = {})
   return orderByParts.length > 0 ? `ORDER BY ${orderByParts.join(', ')}` : '';
 };
 
+// --- HELPER: Returns the output column names of the top-level SELECT list ---
+// e.g. "nml.Detail" -> "Detail", "e.Yr AS Yr" -> "Yr", "CONCAT(...) AS EventDisplay" -> "EventDisplay"
+const getSelectOutputColumns = (sql) => {
+  const columns = new Set();
+  const duplicates = new Set();
+  const selectMatch = /\bSELECT\b/i.exec(sql);
+  if (!selectMatch) return columns;
+
+  let depth = 0;
+  let quote = null;
+  let itemStart = selectMatch.index + selectMatch[0].length;
+  const items = [];
+
+  for (let i = itemStart; i < sql.length; i++) {
+    const ch = sql[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (depth === 0 && ch === ',') {
+      items.push(sql.slice(itemStart, i));
+      itemStart = i + 1;
+    } else if (depth === 0 && /\s/.test(sql[i - 1]) && /^FROM\b/i.test(sql.slice(i, i + 5))) {
+      items.push(sql.slice(itemStart, i));
+      break;
+    }
+  }
+
+  items.forEach((raw) => {
+    const item = raw.trim();
+    if (!item) return;
+    const aliasMatch = /\bAS\s+`?([^`]+?)`?\s*$/i.exec(item);
+    const plainMatch = /(?:^|\.)`?([\w ]+?)`?\s*$/.exec(item);
+    const name = aliasMatch ? aliasMatch[1] : plainMatch ? plainMatch[1] : null;
+    if (!name) return;
+    const key = name.trim();
+    // A name selected twice (e.g. nml.EventCode and e.EventCode) is ambiguous in ORDER BY -> exclude it
+    if (columns.has(key) || duplicates.has(key)) { columns.delete(key); duplicates.add(key); }
+    else columns.add(key);
+  });
+  return columns;
+};
+
+// --- HELPER: Applies the user's sortBy/sortDirection to a paginated query ---
+// Replaces the query's final "ORDER BY <fallback>" (just before LIMIT) with the requested sort,
+// keeping the original ordering as a tiebreaker so pagination stays stable across pages.
+// Only names present in the SELECT list are accepted (whitelist + escapeId => injection-safe).
+// strict: true  -> only apply when EVERY requested field is sortable here; otherwise keep the
+//                  query's existing ORDER BY (used where buildOrderByClause already ran).
+const applySortToQuery = (sql, queryParams = {}, { strict = false } = {}) => {
+  const { sortBy, sortDirection } = queryParams;
+  if (!sortBy || sortBy === 'none') return sql;
+
+  const limitIdx = sql.search(/\bLIMIT\s+\?\s+OFFSET\s+\?/i);
+  if (limitIdx === -1) return sql;
+  let orderIdx = sql.lastIndexOf('ORDER BY', limitIdx);
+  // Ignore an ORDER BY that belongs to a subquery (a ')' would close it before LIMIT)
+  if (orderIdx !== -1 && sql.slice(orderIdx, limitIdx).includes(')') &&
+      (sql.slice(orderIdx, limitIdx).match(/\)/g) || []).length > (sql.slice(orderIdx, limitIdx).match(/\(/g) || []).length) {
+    orderIdx = -1;
+  }
+
+  const fallback = orderIdx === -1 ? '' : sql.slice(orderIdx + 'ORDER BY'.length, limitIdx).trim();
+  const allowed = getSelectOutputColumns(sql);
+  const fields = String(sortBy).split(',').map(f => f.trim()).filter(Boolean);
+  const directions = String(sortDirection || '').split(',');
+
+  const parts = fields.map((field, index) => {
+    if (!allowed.has(field)) return null;
+    const dir = (directions[index] || directions[0] || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+    return `${db.escapeId(field)} ${dir}`;
+  }).filter(Boolean);
+
+  if (parts.length === 0) return sql;
+  if (strict && parts.length !== fields.length) return sql;
+  if (fallback) parts.push(fallback);
+  const head = orderIdx === -1 ? sql.slice(0, limitIdx) : sql.slice(0, orderIdx);
+  return `${head}ORDER BY ${parts.join(', ')}\n      ${sql.slice(limitIdx)}`;
+};
+
 // --- HELPER: Maps incoming JSON body dynamically to the Google Sheet columns ---
 // --- HELPER: Maps incoming JSON body dynamically, PRESERVING existing data ---
 const mapBodyToRow = (body, headers, existingRow = [], userEmail = "System") => {
@@ -1031,7 +1111,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...params, limit, offset]);
 
     res.json({
       data: results,
@@ -1189,7 +1269,7 @@ app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...combinedParams, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...combinedParams, limit, offset]);
 
     res.json({
       data: results,
@@ -1630,7 +1710,7 @@ app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, re
       LIMIT ? OFFSET ?
     `;
 
-    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -2081,7 +2161,7 @@ app.get('/api/newmedialog/satsang-extracted-clips', authenticateToken, async (re
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -2692,7 +2772,7 @@ app.get('/api/data-sharing/:tabId', authenticateToken, async (req, res) => {
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [...dynamicParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...dynamicParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -2952,7 +3032,7 @@ app.get('/api/newmedialog/satsang-category', authenticateToken, async (req, res)
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -3422,7 +3502,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       ORDER BY nml.MLUniqueID DESC
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query), [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -3616,7 +3696,7 @@ app.get('/api/newmedialog/srt-satsang-category', authenticateToken, async (req, 
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [rows] = await db.query(dataQuery, [...finalParams, limit, offset]);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...finalParams, limit, offset]);
 
     res.json({
       data: rows,
@@ -4351,7 +4431,7 @@ app.get('/api/edited-highlights',authenticateToken, async (req, res) => {
       LIMIT ? OFFSET ?
     `;
 
-    const [results] = await db.query(dataQuery, [...dynamicParams, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...dynamicParams, limit, offset]);
 
     res.json({
       data: results,
@@ -4623,7 +4703,7 @@ app.get('/api/digitalrecording',authenticateToken, async (req, res) => {
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...params, limit, offset]);
 
     res.json({
       data: results,
@@ -11588,7 +11668,7 @@ app.get('/api/check-ml-reference', authenticateToken, async (req, res) => {
       WHERE ${whereClause}
     `;
 
-    const [rows] = await db.query(dataQuery, dataParams);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query), dataParams);
     const [[{ total }]] = await db.query(countQuery, params); // Use original params (without limit/offset)
 
     res.json({
@@ -11752,7 +11832,7 @@ app.get('/api/search-new-ml-event-code', authenticateToken, async (req, res) => 
       WHERE ${whereClause}
     `;
 
-    const [rows] = await db.query(dataQuery, dataParams);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query), dataParams);
     const [[{ total }]] = await db.query(countQuery, params);
 
     res.json({
@@ -11919,7 +11999,7 @@ app.get('/api/search-details-global', authenticateToken, async (req, res) => {
       WHERE ${whereClause}
     `;
 
-    const [rows] = await db.query(dataQuery, dataParams);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query), dataParams);
     const [[{ total }]] = await db.query(countQuery, params);
 
     res.json({
@@ -12065,7 +12145,7 @@ app.get('/api/search-extensive', authenticateToken, async (req, res) => {
       WHERE ${whereClause}
     `;
 
-    const [rows] = await db.query(dataQuery, dataParams);
+    const [rows] = await db.query(applySortToQuery(dataQuery, req.query), dataParams);
     const [[{ total }]] = await db.query(countQuery, params);
 
     res.json({
@@ -12156,7 +12236,7 @@ app.get('/api/ml-summary-event-code', authenticateToken, async (req, res) => {
       LIMIT ? OFFSET ?
     `;
     
-    const [results] = await db.query(dataQuery, [...params, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...params, limit, offset]);
 
     res.json({
       data: results,
@@ -13150,7 +13230,7 @@ app.get('/api/search-ml-by-dr-code', authenticateToken, async (req, res) => {
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
-    const [results] = await db.query(dataQuery, [...drParams, limit, offset]);
+    const [results] = await db.query(applySortToQuery(dataQuery, req.query, { strict: true }), [...drParams, limit, offset]);
 
     res.json({
       data: results,
