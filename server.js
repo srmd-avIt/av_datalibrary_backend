@@ -1061,13 +1061,17 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
 
     const orderByString = buildOrderByClause(req.query, filterableColumns, aliases, dateColumns, numericColumns) || 'ORDER BY nml.MLUniqueID DESC';
 
+    // Hide media log entries whose DR code has any Discard status (Discard, Discard - Revamp, Discard - Rectified/Resubmitted)
+    const staticWhere = `(dr.PreservationStatus IS NULL OR UPPER(TRIM(dr.PreservationStatus)) NOT LIKE 'DISCARD%')`;
+    const finalWhere = whereString && whereString.trim() !== '' ? `${whereString} AND ${staticWhere}` : `WHERE ${staticWhere}`;
+
     // COUNT must include same JOINs so WHERE can reference joined columns
     const countQuery = `
       SELECT COUNT(*) as total
       FROM NewMediaLog AS nml
       LEFT JOIN DigitalRecordings AS dr ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${finalWhere}
     `;
     const [[{ total }]] = await db.query(countQuery, params);
     const totalPages = Math.ceil(total / limit);
@@ -1107,7 +1111,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
-      ${whereString}
+      ${finalWhere}
       ${orderByString}
       LIMIT ? OFFSET ?
     `;
@@ -4193,7 +4197,14 @@ app.get('/api/newmedialog/export', async (req, res) => {
     try {
         // FIX: Call the generic buildWhereClause function
         const { whereString, params } = buildWhereClause(req.query, ['MLUniqueID', 'Topic', 'SpeakerSinger'], ['MLUniqueID','FootageSrNo', 'LogSerialNo','fkDigitalRecordingCode','ContentFrom','ContentTo', 'TimeOfDay','fkOccasion','EditingStatus','FootageType','VideoDistribution','Details','SubDetails','CounterFrom','CounterTo','SubDuration','TotalDuration','Language','SpeakerSinger','fkOrganization','Designation','fkCountry','fkState','fkCity','Venue','fkGranth','Number','Topic','Seriesname','SatsangStart','SatsangEnd','IsAudioRecorded','AudioMP3Distribution','AudioWAVDistribution','AudioMP3DRCode','AudioWAVDRCode','Remarks','IsStartPage','EndPage','IsInformal','IsPPGNotPresent','Guidance','DiskMasterDuration','EventRefRemarksCounters','EventRefMLID','EventRefMLID2', 'DubbedLanguage','DubbingArtist','HasSubtitle','SubTitlesLanguage','EditingDeptRemarks','EditingType','BhajanType','IsDubbed','NumberSource','TopicSource','LastModifiedTimestamp','LastModifiedBy','Synopsis','LocationWithinAshram','Keywords','Grading' ,'Segment Category','SegmentDuration','TopicgivenBy' /* add more... */]);
-        const dataQuery = `SELECT * FROM NewMediaLog ${whereString}`;
+        // Exclude media log entries whose DR code has any Discard status (Discard, Discard - Revamp, Discard - Rectified/Resubmitted)
+        const staticWhere = `NOT EXISTS (
+          SELECT 1 FROM DigitalRecordings dr
+          WHERE dr.RecordingCode = NewMediaLog.fkDigitalRecordingCode
+            AND UPPER(TRIM(dr.PreservationStatus)) LIKE 'DISCARD%'
+        )`;
+        const finalWhere = whereString && whereString.trim() !== '' ? `${whereString} AND ${staticWhere}` : `WHERE ${staticWhere}`;
+        const dataQuery = `SELECT * FROM NewMediaLog ${finalWhere}`;
         const [results] = await db.query(dataQuery, params);
         if (results.length === 0) {
             return res.status(404).send("No data found to export for the given filters.");
