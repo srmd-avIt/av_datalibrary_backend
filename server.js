@@ -3297,7 +3297,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       'DubbedLanguage', 'DubbingArtist', 'HasSubtitle', 'SubTitlesLanguage', 'EditingDeptRemarks', 'EditingType',
       'BhajanType', 'IsDubbed', 'NumberSource', 'TopicSource', 'LastModifiedTimestamp', 'LastModifiedBy',
       'Synopsis', 'LocationWithinAshram', 'Keywords', 'Grading', 'Segment Category', 'Segment Duration', 'TopicgivenBy',
-      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'DistributionDriveLink',
+      'PreservationStatus', 'RecordingCode', 'RecordingName', 'fkEventCode', 'Masterquality', 'Dimension', 'DistributionDriveLink',
       'EventName', 'EventCode', 'Yr', 'NewEventCategory', 'EventName - EventCode', 
       'NewEventFrom', 'NewEventTo' // <-- ADDED SO THEY CAN BE SORTED
     ];
@@ -3310,6 +3310,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
       RecordingName: 'dr',
       fkEventCode: 'dr',
       Masterquality: 'dr',
+      Dimension: 'dr',
       DistributionDriveLink: 'dr',
       EventName: 'e',
       EventCode: 'e',
@@ -3470,6 +3471,7 @@ app.get('/api/newmedialog/satsang-dashboard', authenticateToken, async (req, res
         nml.LastModifiedTimestamp,
         nml.LastModifiedBy,
         dr.Masterquality AS Masterquality,
+        dr.Dimension AS Dimension,
         dr.DistributionDriveLink AS DistributionDriveLink,
         dr.RecordingName AS RecordingName,
         e.EventName,
