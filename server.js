@@ -135,6 +135,14 @@ function toMySQLDateTime(val) {
   return d.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+function normalizeListLimit(rawLimit, defaultLimit = 50, maxLimit = 2000) {
+  const parsed = parseInt(rawLimit, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return defaultLimit;
+  }
+  return Math.min(parsed, maxLimit);
+}
+
 function escapeCsvValue(value) {
   if (value === null || value === undefined) {
     return '';
@@ -1021,7 +1029,7 @@ app.put('/api/events/:EventID',authenticateToken, async (req, res) => {
 app.get('/api/newmedialog', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = normalizeListLimit(req.query.limit, 50, 2000);
     const offset = (page - 1) * limit;
 
     // columns that may be filtered / searched (include joined table columns)
@@ -1165,7 +1173,7 @@ app.get('/api/newmedialog', authenticateToken, async (req, res) => {
 app.get('/api/newmedialog/formal', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = normalizeListLimit(req.query.limit, 50, 2000);
     const offset = (page - 1) * limit;
 
     const filterableColumns = [
@@ -1567,7 +1575,7 @@ const SegmentCategory = req.body['Segment Category'];
 app.get('/api/newmedialog/all-except-satsang', authenticateToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = normalizeListLimit(req.query.limit, 50, 2000);
     const offset = (page - 1) * limit;
 
     const filterableColumns = [
