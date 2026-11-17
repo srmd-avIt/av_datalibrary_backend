@@ -135,6 +135,34 @@ function toMySQLDateTime(val) {
   return d.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+function escapeCsvValue(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const stringValue = String(value);
+  return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function writeCsvResponse(res, rows, fileName, headers = null) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return false;
+  }
+
+  const csvHeaders = headers || Object.keys(rows[0]);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.write(csvHeaders.map(escapeCsvValue).join(',') + '\n');
+
+  for (const row of rows) {
+    const csvRow = csvHeaders.map(header => escapeCsvValue(row[header])).join(',');
+    res.write(csvRow + '\n');
+  }
+
+  res.end();
+  return true;
+}
+
 
 app.post('/send-invitation', async (req, res) => {
   const { email, role, teams, message, appLink } = req.body;
@@ -1363,11 +1391,11 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
     const exportQuery = `
       SELECT
         nml.*,
-        dr.RecordingName   AS RecordingName,
-        dr.Masterquality   AS Masterquality,
-        e.EventName        AS EventName,
-        e.EventCode        AS EventCode,
-        e.Yr               AS Yr,
+        dr.RecordingName AS RecordingName,
+        dr.Masterquality AS Masterquality,
+        e.EventName AS EventName,
+        e.EventCode AS EventCode,
+        e.Yr AS Yr,
         CONCAT(
           COALESCE(e.EventName, '' ),
           CASE WHEN COALESCE(e.EventName,'') <> '' AND COALESCE(e.EventCode,'') <> '' THEN ' - ' ELSE '' END,
@@ -1378,20 +1406,11 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
           CASE WHEN COALESCE(nml.Detail,'') <> '' AND COALESCE(nml.SubDetail,'') <> '' THEN ' - ' ELSE '' END,
           COALESCE(nml.SubDetail, '')
         ) AS DetailSub,
-        (CASE 
-            WHEN nml.EventRefMLID IS NOT NULL AND nml.EventRefMLID != '' 
-            THEN (
-                SELECT TRIM(CONCAT_WS(' | ',
-                    NULLIF(DATE_FORMAT(ref.ContentFrom, '%d-%m-%Y'), ''),
-                    NULLIF(ref.Detail, ''),
-                    NULLIF(ref.fkCity, '')
-                ))
-                FROM NewMediaLog AS ref
-                WHERE ref.MLUniqueID = nml.EventRefMLID
-                LIMIT 1
-            )
-            ELSE NULL
-        END) AS EventRefMLID_Details,
+        TRIM(CONCAT_WS(' | ',
+          NULLIF(DATE_FORMAT(ref.ContentFrom, '%d-%m-%Y'), ''),
+          NULLIF(ref.Detail, ''),
+          NULLIF(ref.fkCity, '')
+        )) AS EventRefMLID_Details,
         (CASE
             WHEN nml.EventRefMLID IS NOT NULL AND nml.EventRefMLID != ''
             THEN NULL
@@ -1402,6 +1421,8 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
         ON nml.fkDigitalRecordingCode = dr.RecordingCode
       LEFT JOIN Events AS e
         ON dr.fkEventCode = e.EventCode
+      LEFT JOIN NewMediaLog AS ref
+        ON ref.MLUniqueID = nml.EventRefMLID
       ${combinedWhere}
       ORDER BY nml.MLUniqueID DESC
     `;
@@ -1412,21 +1433,11 @@ app.get('/api/newmedialog/formal/export', async (req, res) => {
       return res.status(404).send('No records found for export.');
     }
 
-    // --- CSV build ---
     const headers = Object.keys(results[0]);
-    const csvHeader = headers.join(',');
-    const csvRows = results.map(row =>
-      headers.map(header => {
-        const value = row[header];
-        const strValue = value === null || value === undefined ? '' : String(value);
-        return `"${strValue.replace(/"/g, '""')}"`;
-      }).join(',')
-    );
-    const csvContent = [csvHeader, ...csvRows].join('\n');
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="newmedialog_formal.csv"');
-    res.status(200).send(csvContent);
+    const exported = writeCsvResponse(res, results, 'newmedialog_formal.csv', headers);
+    if (!exported) {
+      return res.status(404).send('No records found for export.');
+    }
 
   } catch (err) {
     console.error("❌ Export Error in /api/newmedialog/export-formal:", err);
@@ -1850,21 +1861,11 @@ app.get('/api/newmedialog/all-except-satsang/export', async (req, res) => {
       return res.status(404).send("No records found for export.");
     }
 
-    // build CSV
     const headers = Object.keys(results[0]);
-    const csvHeader = headers.join(',');
-    const csvRows = results.map(row =>
-      headers.map(header => {
-        const value = row[header];
-        const strValue = String(value === null || value === undefined ? '' : value);
-        return `"${strValue.replace(/"/g, '""')}"`;
-      }).join(',')
-    );
-    const csvContent = [csvHeader, ...csvRows].join('\n');
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="newmedialog_all_except_satsang.csv"');
-    res.status(200).send(csvContent);
+    const exported = writeCsvResponse(res, results, 'newmedialog_all_except_satsang.csv', headers);
+    if (!exported) {
+      return res.status(404).send("No records found for export.");
+    }
 
   } catch (err) {
     console.error("❌ Export Error in /api/newmedialog/export-all-except-satsang:", err);
